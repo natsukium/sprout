@@ -1,0 +1,9 @@
+FROM golang:1.26-alpine3.24 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /todo .
+
+FROM alpine:3.24
+COPY --from=build /todo /usr/local/bin/todo
+EXPOSE 8080
+ENTRYPOINT ["todo"]

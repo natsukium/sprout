@@ -1,0 +1,88 @@
+# The todo stack as plain Kubernetes manifests. k3s applies everything in its
+# manifests directory at startup; guest.nix only points k3s at this file.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: todo-db
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: todo-db }
+  template:
+    metadata:
+      labels: { app: todo-db }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: todo }
+            - { name: POSTGRES_PASSWORD, value: todo }
+            - { name: POSTGRES_DB, value: todo }
+            # A subdirectory of the mount, so the volume root can stay
+            # non-empty without upsetting Postgres init.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { containerPort: 5432 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        # Backed by k3s's built-in local-path provisioner, which writes under
+        # /var, so the database survives pod restarts and `sprout stop` / `up`.
+        - name: data
+          persistentVolumeClaim: { claimName: todo-db }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-db
+spec:
+  selector: { app: todo-db }
+  ports:
+    - { port: 5432, targetPort: 5432 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: todo-web }
+  template:
+    metadata:
+      labels: { app: todo-web }
+    spec:
+      containers:
+        - name: web
+          # skaffold rewrites this to the image it built and pushed to the
+          # guest's local registry (see skaffold.yaml, guest.nix).
+          image: todo
+          env:
+            - { name: DATABASE_URL, value: "postgres://todo:todo@todo-db:5432/todo?sslmode=disable" }
+            - { name: LISTEN_ADDR, value: ":8080" }
+          ports:
+            - { containerPort: 8080 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-web
+spec:
+  # A LoadBalancer so k3s's built-in servicelb binds the node's port 80;
+  # `sprout forward --bind 0.0.0.0 80` then reaches it. Traefik is disabled in
+  # guest.nix to leave port 80 free.
+  type: LoadBalancer
+  selector: { app: todo-web }
+  ports:
+    - { port: 80, targetPort: 8080 }

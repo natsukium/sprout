@@ -1,0 +1,21 @@
+apiVersion: skaffold/v4beta12
+kind: Config
+metadata:
+  name: todo
+build:
+  # A plain docker build of the Containerfile. The image is pushed to the
+  # local registry the guest runs (SKAFFOLD_DEFAULT_REPO points at it, see
+  # guest.nix), which k3s is configured to pull from. This file names no
+  # runtime and no registry, so it stays portable.
+  artifacts:
+    - image: todo
+      context: ../app
+      docker:
+        dockerfile: Containerfile
+  local:
+    push: true
+manifests:
+  rawYaml:
+    - manifests/stack.yaml
+deploy:
+  kubectl: {}

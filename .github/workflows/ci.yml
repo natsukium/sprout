@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: flake check / go / cli
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+      - uses: Mic92/niks3-action@12d3e320b2a99b7938f9634bd337cd9fec104609 # v1.1.0
+        with:
+          server-url: https://niks3.natsukium.com
+      - run: nix flake check --print-build-logs
+      # `nix flake check` skips sproutConfigurations as an unknown flake
+      # output, so forcing the drvPath is what covers nix/bundle.nix here.
+      # See dev/check-examples.sh for the same check over the examples.
+      - run: nix eval --raw .#sproutConfigurations.dev.drvPath
+      - run: ./dev/check-examples.sh
+      - run: nix develop -c go vet ./...
+      # -race because the network stack and the idle watcher are concurrent.
+      - run: nix develop -c go test -race ./...
+      # `nix flake check` evaluates `packages` without building it, so nothing
+      # else here catches a vendorHash left stale by a go.mod change.
+      - run: nix build .#sprout --print-build-logs
+
+  guests:
+    name: guest closure (${{ matrix.example }}/${{ matrix.vm }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { example: minimal, vm: dev }
+          - { example: podman, vm: todo }
+          - { example: k3s, vm: todo }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+      - uses: Mic92/niks3-action@12d3e320b2a99b7938f9634bd337cd9fec104609 # v1.1.0
+        with:
+          server-url: https://niks3.natsukium.com
+      # Only the guest closure is built here, not the bundle around it: the
+      # bundle is a two-file runCommand whose substitution value is nil (users
+      # build their own project's bundle, not an example's), while this closure
+      # is the base system every guest shares.
+      - run: nix build ./examples/${{ matrix.example }}#nixosConfigurations.sprout-${{ matrix.vm }}.config.system.build.toplevel --print-build-logs

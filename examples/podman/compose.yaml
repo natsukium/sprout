@@ -1,0 +1,31 @@
+# The todo stack as a plain compose file: a Postgres service and the app,
+# built from ../app/Containerfile. Compose gives the two containers a shared
+# network with DNS, so the app reaches Postgres at the hostname "db".
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: todo
+      POSTGRES_PASSWORD: todo
+      POSTGRES_DB: todo
+    # A named volume on the guest's persistent /var, so todos survive
+    # `sprout stop` / `sprout up`.
+    volumes:
+      - todo-db:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: ../app
+      dockerfile: Containerfile
+    environment:
+      DATABASE_URL: postgres://todo:todo@db:5432/todo?sslmode=disable
+      LISTEN_ADDR: ":8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    # No wait-for-db is needed: the app retries the connection until Postgres
+    # answers, so start order does not matter.
+
+volumes:
+  todo-db:
