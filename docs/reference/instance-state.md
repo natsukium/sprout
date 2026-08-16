@@ -30,6 +30,13 @@ A daemon holds `daemon.lock` for its lifetime. The kernel releases the lock on
 any process exit, so a boot that acquires it can clean up a VM process left by
 a crashed daemon.
 
+Concurrent `up`/`start` calls converge on the lock rather than failing: a
+caller that finds it held waits for the holder to start serving control, then
+hands off to it (for `up`, after re-checking that the running build matches
+its own). Serializing `sprout up` with an external `flock` is therefore
+unnecessary. A lock held with no daemon ever serving behind it — a
+long-running `snapshot restore`, say — still fails after a short wait.
+
 `<id>` is the hash `sprout list` shows in its ID column: a hex digest of the
 repository and branch (see [instance
 identity](../explanation/instances.md)), so it is filesystem-safe whatever

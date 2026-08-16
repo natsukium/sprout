@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Once nix GC reclaims the recorded build there is nothing left to boot from,
@@ -33,5 +34,41 @@ func TestStartRejectsMissingBundle(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sprout up") {
 		t.Errorf("error should point at `sprout up` to rebuild, got: %v", err)
+	}
+}
+
+// `start` losing the boot race to another booter is a success, not an error.
+func TestStartForegroundHandsOffToConcurrentBoot(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "startbootrace"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{Version: manifestSchemaVersion}
+	m.Guest.IP = "127.0.0.1"
+	m.Guest.SSHUser = "sprout"
+	if err := writeJSON(filepath.Join(bundle, "manifest.json"), m); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
+		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	holdLockAndServeLater(t, dir, 400*time.Millisecond)
+
+	out := captureStdout(t, func() error {
+		return startForeground(&Identity{ID: id, Name: "webapp"})
+	})
+	if !strings.Contains(out, "already running") {
+		t.Errorf("start should have handed off to the concurrent boot, output:\n%s", out)
 	}
 }

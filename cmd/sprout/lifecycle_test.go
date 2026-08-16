@@ -89,6 +89,52 @@ func TestDeleteRunningInstanceReportsOnlyDeletion(t *testing.T) {
 	}
 }
 
+// A `stop` losing the race to a concurrent stop — daemon alive for the
+// running check, gone by the STOP request — must report the instance stopped,
+// not fail.
+func TestStopOneToleratesConcurrentStop(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000007"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
+		ID: id, Name: "racer", KeySource: "directory", GuestIP: "127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sock := filepath.Join(dir, "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// As a daemon torn down by a concurrent client leaves it: answering the
+		// running check, gone by the follow-up STOP.
+		ln.Close()
+		os.Remove(sock)
+		line, _ := bufio.NewReader(conn).ReadString('\n')
+		if strings.TrimSpace(line) == "PING" {
+			fmt.Fprintln(conn, "OK") //nolint:errcheck
+		}
+		conn.Close()
+	}()
+
+	out := captureStdout(t, func() error {
+		return stopOne(id, stopBehavior{reportStopped: true})
+	})
+	if !strings.Contains(out, "stopped") {
+		t.Errorf("stop losing to a concurrent stop should still report stopped, output:\n%s", out)
+	}
+}
+
 // A piped stdin does not echo the answer as a terminal does, so status output
 // must not end up appended to the prompt line.
 func TestConfirmYesTerminatesAPipedPrompt(t *testing.T) {

@@ -84,7 +84,9 @@ func stopOne(id string, behavior stopBehavior) error {
 		}
 		return errors.New(msg)
 	}
-	if _, err := controlRequest(id, "STOP"); err != nil {
+	// A concurrent stop can tear the daemon down between the running check and
+	// this request, and a daemon already gone is the state STOP asked for.
+	if _, err := controlRequest(id, "STOP"); err != nil && instanceRunning(id) {
 		return fmt.Errorf("instance %q: stop failed: %w", name, err)
 	}
 	// Polled until the control socket goes quiet, so `stop && rm`

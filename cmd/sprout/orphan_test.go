@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,53 @@ func TestAcquireInstanceLockExcludesASecondHolder(t *testing.T) {
 		t.Fatalf("acquire after release failed: %v", err)
 	}
 	second.Close()
+}
+
+// Once the winner serves control, a losing booter's failure to acquire must
+// read as a handoff rather than as the lock timeout.
+func TestAcquireBootLockHandsOffOnceTheWinnerServes(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "bootlockserve"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireInstanceLock(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
+
+	if _, err := acquireBootLock(dir, id, 5*time.Second); !errors.Is(err, errInstanceNowServing) {
+		t.Fatalf("acquireBootLock returned %v, want errInstanceNowServing", err)
+	}
+}
+
+// Contention with no daemon behind it (a crashed winner that never served, a
+// snapshot restore holding the lock) must keep the timeout error: exiting
+// clean there would make the detached parent wait on a boot nobody performs.
+func TestAcquireBootLockTimesOutWithoutADaemon(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const id = "bootlocktimeout"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := t.TempDir()
+	held, err := acquireInstanceLock(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := acquireBootLock(dir, id, 300*time.Millisecond); err == nil || errors.Is(err, errInstanceNowServing) {
+		t.Fatalf("want the lock-held timeout error, got %v", err)
+	}
+
+	held.Close()
+	lock, err := acquireBootLock(dir, id, time.Second)
+	if err != nil {
+		t.Fatalf("acquire after release failed: %v", err)
+	}
+	lock.Close()
 }
 
 // End to end over real processes: a survivor carrying the instance's socket is
