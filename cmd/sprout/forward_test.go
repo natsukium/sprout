@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -100,6 +101,43 @@ func TestDefaultBindCoversBothLoopbackFamilies(t *testing.T) {
 		}
 		probe.Close()
 		t.Error("nothing bound ::1, so a browser reaching for it gets a refusal")
+	}
+}
+
+// A failed bind names a sprout router holding the port, whichever --domain
+// it serves.
+func TestForwardBindConflictNamesARouter(t *testing.T) {
+	for name, respond := range map[string]func(net.Conn){
+		"default domain": routerIndexResponse,
+		"other domain":   routerForeignHostResponse,
+	} {
+		t.Run(name, func(t *testing.T) {
+			port := occupiedPort(t, respond)
+			_, err := listenHostPort("127.0.0.1", port)
+			if err == nil {
+				t.Fatal("listenHostPort on a router-held port succeeded, want an error naming the router")
+			}
+			if !strings.Contains(err.Error(), "sprout route serve") {
+				t.Errorf("error %q does not name the router", err)
+			}
+		})
+	}
+}
+
+// A holder sprout cannot identify keeps the generic error and its lsof hint.
+func TestForwardBindConflictOnAStranger(t *testing.T) {
+	port := occupiedPort(t, func(c net.Conn) {
+		io.WriteString(c, "HTTP/1.1 200 OK\r\nServer: nginx\r\nContent-Length: 0\r\n\r\n")
+	})
+	_, err := listenHostPort("127.0.0.1", port)
+	if err == nil {
+		t.Fatal("listenHostPort on an occupied port succeeded, want an error")
+	}
+	if strings.Contains(err.Error(), "route serve") {
+		t.Errorf("error %q blames a sprout router, but a stranger holds the port", err)
+	}
+	if !strings.Contains(err.Error(), "lsof") {
+		t.Errorf("error %q dropped the lsof hint a stranger needs", err)
 	}
 }
 
