@@ -19,7 +19,10 @@
       "sprout-ready.target"
     ];
     requiredBy = [ "sprout-ready.target" ];
-    unitConfig.RequiresMountsFor = [ "/var" ];
+    # Each guestPath, not just its parent: if a consumer mounts something at
+    # the same path (e.g. a tmpfs masking a workspace dir), the bind must be
+    # ordered after it so the cache lands on top.
+    unitConfig.RequiresMountsFor = [ "/var" ] ++ lib.mapAttrsToList (_: c: c.guestPath) instanceCaches;
     path = with pkgs; [
       coreutils
       util-linux
