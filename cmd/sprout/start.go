@@ -52,7 +52,14 @@ func startForeground(id *Identity) error {
 	if err != nil {
 		return err
 	}
-	return bootInstance(dir, inst, manifest)
+	err = bootInstance(dir, inst, manifest)
+	// `start` boots the bundle already on record, so any serving daemon is the
+	// state it asked for; converging a changed definition is `up`'s job.
+	if errors.Is(err, errInstanceNowServing) {
+		fmt.Printf("instance %q is already running\n", id.Display())
+		return nil
+	}
+	return err
 }
 
 func stoppedError(id *Identity, selector string) error {

@@ -261,18 +261,6 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 		}
 	}
 
-	if instanceRunning(id.ID) {
-		prev, _, err := loadInstance(id.ID)
-		if err == nil && prev.Bundle == bundle {
-			fmt.Printf("instance %q is already running\n", id.Display())
-			return nil
-		}
-		fmt.Printf("instance %q definition changed, rebooting …\n", id.Display())
-		if err := stopOne(id.ID, stopBehavior{reportStopped: true}); err != nil {
-			return fmt.Errorf("stopping %q for reboot: %w", id.Display(), err)
-		}
-	}
-
 	manifest, err := loadManifest(filepath.Join(bundle, "manifest.json"))
 	if err != nil {
 		return err
@@ -282,10 +270,42 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 		def = manifest.Definition
 	}
 
-	inst := id.newInstance()
-	inst.Definition, inst.Bundle = def, bundle
-	inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
-	return bootInstance(dir, inst, manifest)
+	// Bounded rather than looping until the check settles: two `up`s carrying
+	// different bundles can keep stopping each other's boot, and a bound turns
+	// that ping-pong into an error instead of an endless reboot cycle.
+	for attempt := 0; ; attempt++ {
+		if instanceRunning(id.ID) {
+			prev, _, loadErr := loadInstance(id.ID)
+			if loadErr == nil && prev.Bundle == bundle {
+				fmt.Printf("instance %q is already running\n", id.Display())
+				return nil
+			}
+			if attempt >= 3 {
+				if loadErr != nil {
+					return fmt.Errorf("instance %q is running but its record cannot be read: %w", id.Display(), loadErr)
+				}
+				return fmt.Errorf("another sprout process keeps booting %q with a different definition; retry once the concurrent `up`s agree", id.Display())
+			}
+			fmt.Printf("instance %q definition changed, rebooting …\n", id.Display())
+			// A concurrent `up` rebooting the same changed definition may stop
+			// the daemon first, and losing that race is convergence, not a
+			// failure.
+			if err := stopOne(id.ID, stopBehavior{reportStopped: true, quietIfNotRunning: true}); err != nil {
+				return fmt.Errorf("stopping %q for reboot: %w", id.Display(), err)
+			}
+		} else if attempt >= 3 {
+			return fmt.Errorf("booting %q keeps losing to other sprout processes; retry once the concurrent boots settle", id.Display())
+		}
+
+		inst := id.newInstance()
+		inst.Definition, inst.Bundle = def, bundle
+		inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
+		err = bootInstance(dir, inst, manifest)
+		if !errors.Is(err, errInstanceNowServing) {
+			return err
+		}
+		fmt.Printf("another sprout process booted %q first, rechecking …\n", id.Display())
+	}
 }
 
 // Shared by `up` and `start`, so a restart takes the same guest-setup path as
@@ -302,7 +322,7 @@ func bootInstance(dir string, inst *Instance, manifest *Manifest) error {
 	// for the daemon's whole life, so holding it proves no other daemon owns
 	// this instance, which is what licenses reapOrphans to kill VM processes
 	// rather than ask about them.
-	lock, err := acquireInstanceLock(dir, instanceLockWait)
+	lock, err := acquireBootLock(dir, inst.ID, instanceLockWait)
 	if err != nil {
 		return err
 	}

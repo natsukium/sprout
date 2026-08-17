@@ -23,6 +23,21 @@ const instanceLockWait = 15 * time.Second
 // death however abrupt, so holding it proves no other daemon is alive here,
 // and therefore that a matching vfkit belongs to a dead one.
 func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
+	return lockInstance(dir, wait, nil)
+}
+
+var errInstanceNowServing = errors.New("another daemon started serving this instance")
+
+// A winning daemon holds the lock from the start of its boot but answers
+// control only once its runner is up, so a booter that lost the race would
+// wait out the whole lock timeout and fail against a healthy winner. Checking
+// PING once before the wait would not close that window — only checking
+// *during* it does.
+func acquireBootLock(dir, id string, wait time.Duration) (*os.File, error) {
+	return lockInstance(dir, wait, func() bool { return instanceRunning(id) })
+}
+
+func lockInstance(dir string, wait time.Duration, serving func() bool) (*os.File, error) {
 	path := filepath.Join(dir, "daemon.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -37,6 +52,10 @@ func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			f.Close()
 			return nil, fmt.Errorf("locking %s: %w", path, err)
+		}
+		if serving != nil && serving() {
+			f.Close()
+			return nil, errInstanceNowServing
 		}
 		if !time.Now().Before(deadline) {
 			f.Close()

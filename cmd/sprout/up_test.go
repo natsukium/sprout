@@ -1,11 +1,13 @@
 package main
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
@@ -267,4 +269,78 @@ func stdioFlags(t *testing.T) [3]int {
 		flags[fd] = got
 	}
 	return flags
+}
+
+// Simulates the losing side of a boot race: the instance flock is already
+// held, and the winner's control socket starts answering only after delay. The
+// socket is bound up front and renamed into place on schedule, because binding
+// it from the timing goroutine would put t.Fatal off the test goroutine.
+func holdLockAndServeLater(t *testing.T, dir string, delay time.Duration) {
+	t.Helper()
+	held, err := acquireInstanceLock(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { held.Close() })
+
+	pending := filepath.Join(dir, "control.sock.pending")
+	ln, err := net.Listen("unix", pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	d := &fakeDaemon{}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go d.handle(conn)
+		}
+	}()
+	go func() {
+		time.Sleep(delay)
+		_ = os.Rename(pending, filepath.Join(dir, "control.sock"))
+	}()
+}
+
+// A second `up` that reads `stopped` while the first is mid-boot must
+// converge to the first's daemon and exit clean, not wait out the instance
+// lock and fail.
+func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "upbootrace"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{Version: manifestSchemaVersion}
+	m.Guest.IP = "127.0.0.1"
+	m.Guest.SSHUser = "sprout"
+	if err := writeJSON(filepath.Join(bundle, "manifest.json"), m); err != nil {
+		t.Fatal(err)
+	}
+	// The record's bundle matches the one being booted, so the post-handoff
+	// re-check must settle on "already running" rather than a reboot.
+	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
+		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	holdLockAndServeLater(t, dir, 400*time.Millisecond)
+
+	out := captureStdout(t, func() error {
+		return upForeground(&Identity{ID: id, Name: "webapp", KeySource: "directory"}, "", ".", bundle)
+	})
+	if !strings.Contains(out, "already running") {
+		t.Errorf("up should have handed off to the concurrent boot, output:\n%s", out)
+	}
 }
