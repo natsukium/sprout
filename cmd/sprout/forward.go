@@ -125,6 +125,13 @@ func listenHostPort(bindHost string, port int) ([]net.Listener, error) {
 	if errors.Is(err, errPrivilegedBind) {
 		return nil, fmt.Errorf("%w — rerun with --bind 0.0.0.0 to bind all interfaces instead", err)
 	}
+	// The probe domain is arbitrary: a router marks every response it
+	// writes itself (Server: sprout-route), including for a Host it does
+	// not serve, so a router on a custom --domain is still recognized.
+	if errors.Is(err, syscall.EADDRINUSE) && probeRouter(probeAddr(bindHost), port, defaultRouteDomain) != probeNotRouter {
+		return nil, fmt.Errorf("cannot bind %s:%d: a sprout router (sprout route serve) holds the port — stop it, or forward through a different host port (PORT:GUESTPORT picks both sides)",
+			bindHost, port)
+	}
 	return lns, err
 }
 
