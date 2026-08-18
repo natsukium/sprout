@@ -125,6 +125,8 @@ func consoleLogPath(instDir string) string     { return filepath.Join(instDir, "
 func runnerLogPath(instDir string) string      { return filepath.Join(instDir, "runner.log") }
 func upLogPath(instDir string) string          { return filepath.Join(instDir, "up.log") }
 
+func knownHostsPath(instDir string) string { return filepath.Join(instDir, "known_hosts") }
+
 // The data share, mounted in the guest at /run/sprout. These names are a
 // contract with the guest modules that read them, so they cannot change here
 // alone — nix/guest/base.nix names the same files.
