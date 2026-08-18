@@ -49,6 +49,21 @@ the orphan.
 when the recorded build is still in the Nix store (no rebuild, no
 flake, works from any directory).
 
+## A routed URL answers 502
+
+`"<name>" is running but nothing answered on guest port N` means the
+instance is up and that port refused the connection — never that the
+instance is down (a stop landing mid-request gets the waking 503
+instead). Either the port is wrong (the bare name targets guest :80;
+put the port in front, `http://5173.<label>.<domain>/`) or the server
+is bound to the guest's `127.0.0.1`, which the router cannot reach
+because it arrives over the guest's network interface. Confirm before
+guessing, then bind `0.0.0.0`:
+
+```sh
+sprout exec -- ss -ltnp
+```
+
 ## Guest looks low on resources
 
 `sprout list` CPU/MEM are host-side occupancy (hypervisor footprint,
