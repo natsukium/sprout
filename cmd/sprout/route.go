@@ -398,7 +398,7 @@ func (r *router) bridge(client net.Conn, br *bufio.Reader, head []byte, host, id
 	guestAddr := net.JoinHostPort(info.GuestIP, strconv.Itoa(gport))
 	guest, err := dialGuest(id, guestAddr, true)
 	if err != nil {
-		if guest = r.recoverDialFailure(client, head, host, id, guestAddr, gport, err); guest == nil {
+		if guest = r.recoverDialFailure(client, head, host, id, info, guestAddr, gport, err); guest == nil {
 			return
 		}
 	}
@@ -425,10 +425,10 @@ func (r *router) bridge(client net.Conn, br *bufio.Reader, head []byte, host, id
 //
 // Returns a live guest connection when a retry recovered one, nil after
 // writing an error page.
-func (r *router) recoverDialFailure(conn net.Conn, head []byte, host, id, guestAddr string, gport int, err error) net.Conn {
+func (r *router) recoverDialFailure(conn net.Conn, head []byte, host, id string, info *controlInfo, guestAddr string, gport int, err error) net.Conn {
 	var rejected *controlRejectedError
 	if errors.As(err, &rejected) {
-		r.writeDialRejected(conn, head, host, id, gport, rejected)
+		r.writeDialRejected(conn, head, host, id, info, gport, rejected)
 		return nil
 	}
 	if state, _ := r.ensureReady(id); state != readyOK {
@@ -445,7 +445,7 @@ func (r *router) recoverDialFailure(conn net.Conn, head []byte, host, id, guestA
 		return guest
 	}
 	if errors.As(retryErr, &rejected) {
-		r.writeDialRejected(conn, head, host, id, gport, rejected)
+		r.writeDialRejected(conn, head, host, id, info, gport, rejected)
 		return nil
 	}
 	r.logRequest(host, head, fmt.Sprintf("%s control socket: %v (502)", instanceLog(id), retryErr))
@@ -458,13 +458,18 @@ func (r *router) recoverDialFailure(conn net.Conn, head []byte, host, id, guestA
 // The daemon replies ERR for every way its dial can fail, so only the reason
 // naming a refusal proves a closed (or loopback-bound) port; a timeout means
 // the guest never answered at all — a hung guest, a wedged network stack.
-func (r *router) writeDialRejected(conn net.Conn, head []byte, host, id string, gport int, rejected *controlRejectedError) {
+func (r *router) writeDialRejected(conn net.Conn, head []byte, host, id string, info *controlInfo, gport int, rejected *controlRejectedError) {
 	name, reason := displayForID(id), rejected.reason()
 	if !isConnectionRefused(reason) {
 		r.logRequest(host, head, fmt.Sprintf("%s guest:%d dial failed: %s (502)", instanceLog(id), gport, reason))
 		r.writeError(conn, http.StatusBadGateway,
 			fmt.Sprintf("Dialing guest port %d of %q failed: %s", gport, name, reason),
 			"Not a refusal, so the guest did not answer at all; <code>sprout logs</code> shows what state it is in.")
+		return
+	}
+	if withinStartGrace(info) {
+		r.logRequest(host, head, fmt.Sprintf("%s guest:%d not listening yet: %s (503)", instanceLog(id), gport, reason))
+		r.writeStarting(conn, name, gport)
 		return
 	}
 	r.logRequest(host, head, fmt.Sprintf("%s guest:%d refused the connection: %s (502)", instanceLog(id), gport, reason))
@@ -478,6 +483,16 @@ func (r *router) writeDialRejected(conn net.Conn, head []byte, host, id string, 
 // kernel stack says "connection refused".
 func isConnectionRefused(reason string) bool {
 	return strings.Contains(strings.ToLower(reason), "refused")
+}
+
+// Readiness is SSH plus sprout-ready.target, which an unhooked guest reaches
+// before its dev server binds, so a port refusing this soon after boot is
+// still the boot. Bounded: a port nothing will ever listen on has to stop
+// pretending.
+const routeStartGrace = 2 * time.Minute
+
+func withinStartGrace(info *controlInfo) bool {
+	return time.Duration(info.UptimeSec)*time.Second < routeStartGrace
 }
 
 func guestPortHint(name string, gport int) string {

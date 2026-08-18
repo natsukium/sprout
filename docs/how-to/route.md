@@ -192,12 +192,20 @@ State   Recv-Q  Send-Q  Local Address:Port
 LISTEN  0       511         127.0.0.1:5173      users:(("node",pid=812,fd=23))
 ```
 
-A stop that lands mid-request is not this error. If the instance goes away
-between the router's readiness check and the dial — an idle auto-stop, a
+For the first two minutes of an instance's life the same refusal answers 503
+and reloads instead, because it is usually not settled yet: readiness means
+SSH plus `sprout-ready.target` ([Readiness](../reference/configuration.md#readiness)),
+which an ordinary guest reaches before its dev server has bound anything, so
+the wake's own page would otherwise hand you an error seconds before the port
+opens. That page carries the same checks as the 502, so a wrong port is still
+visible immediately — only the giving up waits.
+
+A stop that lands mid-request is not this error either. If the instance goes
+away between the router's readiness check and the dial — an idle auto-stop, a
 `sprout stop` from another terminal — the answer is the waking page, which
 reloads and brings the instance back, not a 502 claiming it is running.
 `--verbose` carries the guest-side reason for every dial that did fail, so the
-two are told apart in the log as well:
+cases are told apart in the log as well:
 
 ```console
 route: feat-login.sprout.localhost:8080 "GET / HTTP/1.1" -> "feat/login" (152f2dadd3c6) guest:80 refused the connection: connection was refused (502)
@@ -331,10 +339,11 @@ $ curl -fs --retry 60 --retry-delay 2 --retry-all-errors \
 Sixty attempts two seconds apart give the wake two minutes, then fail rather
 than hang the script on an instance that never comes up. When the bound
 trips, the last status separates two problems waiting treats alike: a 503 is
-a boot or readiness hook still in progress (`sprout logs` shows where it
-stands), while a 502 means the instance is up but nothing listens on the guest
-port ([above](#nothing-answered-on-the-guest-port)), which more waiting does
-not fix.
+something still in progress — a boot, a readiness hook (`sprout logs` shows
+where it stands), or a guest port still opening in the first two minutes after
+the boot — while a 502 means the instance is up, past that grace, and nothing
+listens on the guest port ([above](#nothing-answered-on-the-guest-port)),
+which more waiting does not fix.
 
 `--no-wake` is not a substitute here: it returns 503 forever, until someone
 runs `sprout start`.

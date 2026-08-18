@@ -76,10 +76,23 @@ func (r *router) writeIndex(conn net.Conn) {
 	r.writePage(conn, http.StatusOK, nil, "sprout route", body.String())
 }
 
+func (r *router) writeWaking(conn net.Conn, name string) {
+	r.writeReloading(conn, name,
+		fmt.Sprintf("<p>Waking <strong>%s</strong> — this page reloads until it answers.</p>", html.EscapeString(name)))
+}
+
+// Carries the same hint the 502 would, so a misconfigured port is visible
+// immediately and only the giving up waits for the grace to run out.
+func (r *router) writeStarting(conn net.Conn, name string, gport int) {
+	body := fmt.Sprintf("<p><strong>%s</strong> is up, but nothing is listening on guest port %d yet — this page reloads until something does.</p>",
+		html.EscapeString(name), gport)
+	body += "<p class=\"hint\">" + guestPortHint(name, gport) + "</p>"
+	r.writeReloading(conn, name, body)
+}
+
 // The Refresh header, not a script, drives the reload, so a non-browser
 // client still gets an honest 503 with Retry-After.
-func (r *router) writeWaking(conn net.Conn, name string) {
-	body := fmt.Sprintf("<p>Waking <strong>%s</strong> — this page reloads until it answers.</p>", html.EscapeString(name))
+func (r *router) writeReloading(conn net.Conn, name, body string) {
 	r.writePage(conn, http.StatusServiceUnavailable,
 		map[string]string{"Refresh": "2", "Retry-After": "2"}, "starting "+name, body)
 }

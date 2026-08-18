@@ -20,6 +20,9 @@ type fakeDaemon struct {
 	backend string // host:port every DIAL is bridged to
 	booting bool   // answer INFO with ready:false, as a daemon whose guest is still booting does
 	pid     int    // reported in INFO; readiness waits compare it against a supersededPID
+	// uptimeSec ages the daemon in INFO, which is what the router's start
+	// grace reads.
+	uptimeSec int
 	// vanishAfterInfo stands in for a stop landing between a router's
 	// readiness check and the dial that follows it.
 	vanishAfterInfo bool
@@ -63,7 +66,7 @@ func (d *fakeDaemon) handle(conn net.Conn) {
 	case "PING":
 		fmt.Fprint(conn, "OK\n")
 	case "INFO":
-		fmt.Fprintf(conn, "OK {\"ready\":%t,\"name\":\"webapp\",\"guestIp\":\"127.0.0.1\",\"pid\":%d}\n", !d.booting, d.pid)
+		fmt.Fprintf(conn, "OK {\"ready\":%t,\"name\":\"webapp\",\"guestIp\":\"127.0.0.1\",\"pid\":%d,\"uptimeSec\":%d}\n", !d.booting, d.pid, d.uptimeSec)
 		// Close unlinks the socket, so the next dial fails as it would
 		// against a daemon that has exited.
 		if d.vanishAfterInfo {
@@ -128,10 +131,13 @@ func startEchoBackend(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// Seeds an instance long past its boot, which is what most tests mean by
+// "running"; a boot-fresh one is built by hand (see the start grace).
+//
 // root must be short: the control socket lives under it (see shortStateRoot).
 func seedInstance(t *testing.T, root, id, name, backend string) *fakeDaemon {
 	t.Helper()
-	d := &fakeDaemon{backend: backend, sawTrack: make(chan bool, 1)}
+	d := &fakeDaemon{backend: backend, uptimeSec: 3600, sawTrack: make(chan bool, 1)}
 	seedInstanceWith(t, root, id, name, d)
 	return d
 }
@@ -370,6 +376,52 @@ func TestRouteGuestDownHintNamesTheLoopbackTrap(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("502 page does not mention %q:\n%s", want, body)
 		}
+	}
+}
+
+// Readiness is SSH plus sprout-ready.target, which an ordinary guest reaches
+// before its dev server binds, so a 502 at that moment is a dead end seconds
+// before the port would have answered.
+func TestRouteFreshBootReloadsUntilTheGuestPortListens(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
+		&fakeDaemon{backend: deadBackend(t), uptimeSec: 20, sawTrack: make(chan bool, 1)})
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	status, head, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
+	if status != "503" {
+		t.Errorf("status = %s, want 503; body:\n%s", status, body)
+	}
+	if !strings.Contains(head, "Refresh: 2") {
+		t.Errorf("response head lacks the Refresh header that carries the client over the gap:\n%s", head)
+	}
+	// A wrong port looks the same as a boot that is merely slow, so the page
+	// that waits still has to say what to check.
+	for _, want := range []string{"nothing is listening on guest port 80 yet", "0.0.0.0"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page does not mention %q:\n%s", want, body)
+		}
+	}
+}
+
+// Past the grace the reloading has to stop: no page should promise a port
+// nothing will ever listen on.
+func TestRouteLongRunningInstanceStopsWaitingForTheGuestPort(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
+		&fakeDaemon{backend: deadBackend(t), uptimeSec: int(routeStartGrace.Seconds()) + 1, sawTrack: make(chan bool, 1)})
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	status, head, _ := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
+	if status != "502" {
+		t.Errorf("status = %s, want 502", status)
+	}
+	if strings.Contains(head, "Refresh:") {
+		t.Errorf("502 still reloads:\n%s", head)
 	}
 }
 
