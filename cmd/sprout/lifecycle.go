@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -225,6 +226,28 @@ func confirmDeletion(targets []deleteTarget) bool {
 	return confirmYes(fmt.Sprintf("delete the %d instance(s) above, including their persistent /var volumes?", len(targets)))
 }
 
+// Husks are hidden so instanceIDs skips them, and carry the id so a delete
+// never collides with a concurrent one on another instance.
+func huskPath(id, dir string) string {
+	return filepath.Join(filepath.Dir(dir), "."+id+".deleting")
+}
+
+// RemoveAll unlinks entries one at a time, so an interrupted delete can leave
+// an instance that still resolves and boots but has lost its /var, or a
+// directory that outlives its record and lists as a ghost. Renaming first
+// leaves either an untouched instance or an unreferenced husk.
+func removeInstanceDir(id, dir string) error {
+	husk := huskPath(id, dir)
+	// A husk from an interrupted delete would otherwise block the rename.
+	if err := os.RemoveAll(husk); err != nil {
+		return err
+	}
+	if err := os.Rename(dir, husk); err != nil {
+		return err
+	}
+	return os.RemoveAll(husk)
+}
+
 // Confirmation is the caller's job, so a bulk delete asks once.
 func deleteOne(t deleteTarget) error {
 	name := displayForID(t.id)
@@ -240,7 +263,7 @@ func deleteOne(t deleteTarget) error {
 		return err
 	}
 	defer lock.Close()
-	if err := os.RemoveAll(t.dir); err != nil {
+	if err := removeInstanceDir(t.id, t.dir); err != nil {
 		return err
 	}
 	// The socket directory symlink lives outside t.dir (see socketdir.go).
@@ -335,7 +358,7 @@ func cmdPrune(force bool) error {
 			fmt.Fprintln(os.Stderr, "skipping:", err)
 			continue
 		}
-		if err := os.RemoveAll(t.dir); err != nil {
+		if err := removeInstanceDir(t.id, t.dir); err != nil {
 			lock.Close()
 			return err
 		}
