@@ -20,7 +20,9 @@ type procStats struct {
 // spawn it as a child. `ps` refuses the rss/vsz keywords without an
 // entitlement sprout cannot claim, so memory comes from `footprint` instead
 // while CPU still comes from `ps`; both are cgo-free.
-func sampleProcTree(root int) (procStats, error) {
+//
+// A variable so a test can stub it: `footprint` is macOS-only.
+var sampleProcTree = func(root int) (procStats, error) {
 	psOut, err := exec.Command("ps", "-axo", "pid=,ppid=,pcpu=").Output()
 	if err != nil {
 		return procStats{}, err

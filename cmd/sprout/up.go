@@ -192,7 +192,7 @@ func descriptorTableSize() int {
 }
 
 func runningPID(id string) int {
-	if info, err := queryInfo(id); err == nil {
+	if info, err := queryInfoBrief(id); err == nil {
 		return info.PID
 	}
 	return 0

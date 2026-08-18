@@ -34,6 +34,7 @@ type fakeDaemon struct {
 	dialErrReply string
 	ln           net.Listener
 	sawTrack     chan bool
+	sawInfoArg   chan string
 }
 
 func (d *fakeDaemon) serve(t *testing.T, sockPath string) {
@@ -66,6 +67,10 @@ func (d *fakeDaemon) handle(conn net.Conn) {
 	case "PING":
 		fmt.Fprint(conn, "OK\n")
 	case "INFO":
+		select {
+		case d.sawInfoArg <- arg:
+		default:
+		}
 		fmt.Fprintf(conn, "OK {\"ready\":%t,\"name\":\"webapp\",\"guestIp\":\"127.0.0.1\",\"pid\":%d,\"uptimeSec\":%d}\n", !d.booting, d.pid, d.uptimeSec)
 		// Close unlinks the socket, so the next dial fails as it would
 		// against a daemon that has exited.
@@ -137,7 +142,7 @@ func startEchoBackend(t *testing.T) string {
 // root must be short: the control socket lives under it (see shortStateRoot).
 func seedInstance(t *testing.T, root, id, name, backend string) *fakeDaemon {
 	t.Helper()
-	d := &fakeDaemon{backend: backend, uptimeSec: 3600, sawTrack: make(chan bool, 1)}
+	d := &fakeDaemon{backend: backend, uptimeSec: 3600, sawTrack: make(chan bool, 1), sawInfoArg: make(chan string, 1)}
 	seedInstanceWith(t, root, id, name, d)
 	return d
 }
@@ -206,6 +211,26 @@ func TestRouteEndToEnd(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Error("daemon never saw a DIAL")
+	}
+}
+
+// The readiness check runs once per request, so it must ask for the form of
+// INFO the daemon answers without forking `ps` and `footprint`.
+func TestRouteReadinessCheckDoesNotAskForTheResourceSample(t *testing.T) {
+	root := shortStateRoot(t)
+	daemon := seedInstance(t, root, "abcd1234ef56", "webapp", startEchoBackend(t))
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+	httpGet(t, addr, "webapp.sprout.localhost")
+
+	select {
+	case arg := <-daemon.sawInfoArg:
+		if arg != "brief" {
+			t.Errorf("router asked INFO %q, want the sample-free \"brief\" form", arg)
+		}
+	case <-time.After(time.Second):
+		t.Error("daemon never saw an INFO")
 	}
 }
 

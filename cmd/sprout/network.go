@@ -155,7 +155,7 @@ func socketBridge(ln net.Listener, hostSock string) {
 // controlServer answers the line-oriented protocol on control.sock:
 //
 //	PING            -> OK
-//	INFO            -> OK <json>
+//	INFO [brief]    -> OK <json>, "brief" skipping the host-side resource sample
 //	DIAL ssh        -> OK, then raw bidirectional stream to guest:22
 //	DIAL ip:port    -> OK, then raw bidirectional stream
 //	STOP            -> OK, then triggers graceful daemon shutdown
@@ -207,9 +207,15 @@ func (s *controlServer) handle(ctx context.Context, conn net.Conn) {
 	case "PING":
 		fmt.Fprintln(conn, "OK")
 	case "INFO":
-		// A failed sample only omits the metrics, rendering as "-" in `list`;
-		// it must never fail the whole INFO response.
-		stats, _ := sampleProcTree(s.runnerPID)
+		// The sample forks `ps` and `footprint` per call, so "brief" skips it
+		// for the callers that never read it. Opt-out rather than opt-in, so
+		// a CLI predating the argument keeps its CPU/MEM columns against this
+		// daemon. A failed sample only omits the metrics, rendering as "-" in
+		// `list`; it must never fail the whole INFO response.
+		var stats procStats
+		if arg != "brief" {
+			stats, _ = sampleProcTree(s.runnerPID)
+		}
 		info, _ := json.Marshal(controlInfo{
 			Name:       s.inst.Name,
 			Definition: s.inst.Definition,
