@@ -99,7 +99,7 @@ func instanceRows(ids []string) []instanceRow {
 			r.Name, r.Workspace = inst.Name, inst.Workspace
 		}
 
-		state, info := instanceState(id, inst, loadErr)
+		state, info := instanceState(id, inst, loadErr, true)
 		r.State = state
 		if info != nil {
 			r.UptimeSec = int64(info.UptimeSec)
@@ -124,9 +124,14 @@ const (
 	stateAbsent = "absent"
 )
 
-// inst may be nil when loadErr is set.
-func instanceState(id string, inst *Instance, loadErr error) (string, *controlInfo) {
-	if info, err := queryInfo(id); err == nil {
+// inst may be nil when loadErr is set. withStats pays the daemon's resource
+// sample — two forks per call — so only callers that print CPU/MEM pass it.
+func instanceState(id string, inst *Instance, loadErr error, withStats bool) (string, *controlInfo) {
+	query := queryInfoBrief
+	if withStats {
+		query = queryInfo
+	}
+	if info, err := query(id); err == nil {
 		if !info.Ready {
 			return stateBooting, info
 		}

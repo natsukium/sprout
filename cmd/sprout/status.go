@@ -73,7 +73,7 @@ func gatherStatus(id *Identity) (*statusOut, error) {
 		return out, nil
 	}
 	out.Definition, out.Workspace = inst.Definition, inst.Workspace
-	state, info := instanceState(id.ID, inst, nil)
+	state, info := instanceState(id.ID, inst, nil, false)
 	out.State = state
 	if info != nil {
 		out.UptimeSec = int64(info.UptimeSec)

@@ -132,14 +132,14 @@ func waitInstanceReady(id string, supersededPID int) error {
 	// the end of the build phase. A build failure exits the child instead,
 	// which callers race against this, so the cap only guards a hung build.
 	started := pollUntil(daemonStartTimeout, 500*time.Millisecond, func() bool {
-		info, err := queryInfo(id)
+		info, err := queryInfoBrief(id)
 		return err == nil && info.PID != supersededPID
 	})
 	if !started {
 		return fmt.Errorf("instance %q daemon did not start within %s", displayForID(id), daemonStartTimeout)
 	}
 	ready := pollUntil(readyTimeout, 500*time.Millisecond, func() bool {
-		info, err := queryInfo(id)
+		info, err := queryInfoBrief(id)
 		return err == nil && info.Ready
 	})
 	if !ready {

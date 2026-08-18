@@ -538,7 +538,7 @@ const (
 // caller can return a re-checking interstitial instead of holding the
 // connection through a ~30s boot.
 func (r *router) ensureReady(id string) (readyState, *controlInfo) {
-	if info, err := queryInfo(id); err == nil {
+	if info, err := queryInfoBrief(id); err == nil {
 		if info.Ready {
 			return readyOK, info
 		}

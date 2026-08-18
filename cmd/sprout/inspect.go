@@ -37,7 +37,7 @@ func cmdInspect(selector string) error {
 		return err
 	}
 
-	state, info := instanceState(id.ID, inst, nil)
+	state, info := instanceState(id.ID, inst, nil, true)
 	label, _ := routeLabelFor(inst.ID, inst.Name)
 	out := inspectOut{
 		Instance:   inst,

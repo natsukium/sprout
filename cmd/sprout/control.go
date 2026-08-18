@@ -114,8 +114,20 @@ type controlInfo struct {
 	CPUPct   float64 `json:"cpuPct"`
 }
 
+// With MemBytes and CPUPct sampled, at the cost of two forks in the daemon.
 func queryInfo(id string) (*controlInfo, error) {
-	line, err := controlRequest(id, "INFO")
+	return requestInfo(id, "INFO")
+}
+
+// Leaves MemBytes and CPUPct zero and costs the daemon no fork. A daemon
+// predating the argument ignores it and samples anyway, so an upgraded CLI
+// needs no fallback against one still running.
+func queryInfoBrief(id string) (*controlInfo, error) {
+	return requestInfo(id, "INFO brief")
+}
+
+func requestInfo(id, command string) (*controlInfo, error) {
+	line, err := controlRequest(id, command)
 	if err != nil {
 		return nil, err
 	}
