@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -173,7 +172,7 @@ func sshTargetFor(id string) (*sshTarget, error) {
 			{"IdentitiesOnly", "yes"},
 			{"ProxyCommand", fmt.Sprintf("%q dial-stdio --instance %s ssh", exe, inst.ID)},
 			{"StrictHostKeyChecking", "accept-new"},
-			{"UserKnownHostsFile", fmt.Sprintf("%q", filepath.Join(dir, "known_hosts"))},
+			{"UserKnownHostsFile", fmt.Sprintf("%q", knownHostsPath(dir))},
 			{"LogLevel", "ERROR"},
 		},
 	}, nil

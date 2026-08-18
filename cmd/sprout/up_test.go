@@ -344,3 +344,61 @@ func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 		t.Errorf("up should have handed off to the concurrent boot, output:\n%s", out)
 	}
 }
+
+// The host key lives only in /var, so trust in it cannot outlive var.img.
+func TestResetStaleHostTrustDropsKnownHostsWhenVarImageIsGone(t *testing.T) {
+	dir := t.TempDir()
+	knownHosts := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("sprout-main ssh-ed25519 AAAA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	warning := captureStderr(t, func() { err = resetStaleHostTrust(dir) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(knownHosts); !os.IsNotExist(statErr) {
+		t.Fatalf("known_hosts survived a missing var.img: %v", statErr)
+	}
+	if !strings.Contains(warning, "/var volume is gone") {
+		t.Errorf("lost /var was not reported to the user, got %q", warning)
+	}
+}
+
+func TestResetStaleHostTrustKeepsKnownHostsWhenVarImageExists(t *testing.T) {
+	dir := t.TempDir()
+	knownHosts := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("sprout-main ssh-ed25519 AAAA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "var.img"), []byte("var-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	warning := captureStderr(t, func() { err = resetStaleHostTrust(dir) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(knownHosts); statErr != nil {
+		t.Fatalf("known_hosts was dropped even though /var is intact: %v", statErr)
+	}
+	if warning != "" {
+		t.Errorf("intact instance warned anyway: %q", warning)
+	}
+}
+
+// A first boot has neither file; it has lost nothing and must stay quiet.
+func TestResetStaleHostTrustIsSilentOnFirstBoot(t *testing.T) {
+	dir := t.TempDir()
+
+	var err error
+	warning := captureStderr(t, func() { err = resetStaleHostTrust(dir) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warning != "" {
+		t.Errorf("first boot warned about state it never had: %q", warning)
+	}
+}

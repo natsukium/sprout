@@ -308,6 +308,30 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 	}
 }
 
+// The guest's host key lives only in /var (nix/guest/base.nix), so a missing
+// var.img means the runner mkfs's a fresh volume and sshd generates a new key.
+// A surviving known_hosts turns that into ssh's "REMOTE HOST IDENTIFICATION
+// HAS CHANGED" — a possible-attack warning for what is really lost state.
+//
+// known_hosts rather than instance.json is the discriminator: the record is
+// rewritten every boot, while known_hosts exists only if a past boot's SSH
+// succeeded, which implies a var.img was there to hold the key.
+func resetStaleHostTrust(dir string) error {
+	if _, err := os.Stat(varImagePath(dir)); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(knownHostsPath(dir)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "warning: this instance's /var volume is gone; the guest boots from an empty /var with a new SSH host key, so its persistent guest state was lost")
+	return nil
+}
+
 // Shared by `up` and `start`, so a restart takes the same guest-setup path as
 // a first boot and credentials are re-projected rather than frozen at the
 // first `up`.
@@ -327,6 +351,9 @@ func bootInstance(dir string, inst *Instance, manifest *Manifest) error {
 		return err
 	}
 	defer lock.Close()
+	if err := resetStaleHostTrust(dir); err != nil {
+		return err
+	}
 	sockDir, err := ensureSocketDir(socketDirBase(), inst.ID, dir)
 	if err != nil {
 		return err

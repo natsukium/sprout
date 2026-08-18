@@ -260,7 +260,9 @@ func instanceIDs() ([]string, error) {
 	}
 	var ids []string
 	for _, e := range entries {
-		if e.IsDir() {
+		// A husk left by an interrupted delete (see removeInstanceDir) is not
+		// an instance, and listing it would resurrect what delete removed.
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
 			ids = append(ids, e.Name())
 		}
 	}

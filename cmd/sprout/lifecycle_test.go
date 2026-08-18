@@ -322,3 +322,61 @@ func TestPruneSkipsLockedOrphan(t *testing.T) {
 		t.Fatalf("unlocked orphan still present: %v", err)
 	}
 }
+
+// An interrupted delete must never leave a readable instance: what survives is
+// either the whole instance or a husk nothing looks at.
+func TestRemoveInstanceDirLeavesNothingBehind(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	dir := newTestInstance(t, root, "aaaa00000010", "husk-free", "var-data")
+
+	if err := removeInstanceDir("aaaa00000010", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("instance dir still present: %v", err)
+	}
+	if _, err := os.Stat(huskPath("aaaa00000010", dir)); !os.IsNotExist(err) {
+		t.Fatalf("husk still present: %v", err)
+	}
+}
+
+// The husk name is derived, not unique per attempt, so a delete interrupted
+// after its rename would otherwise wedge every later delete of the same ID.
+func TestRemoveInstanceDirClearsAnAbandonedHusk(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	dir := newTestInstance(t, root, "aaaa00000011", "retry", "var-data")
+
+	abandoned := huskPath("aaaa00000011", dir)
+	if err := os.MkdirAll(abandoned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandoned, "var.img"), []byte("older"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeInstanceDir("aaaa00000011", dir); err != nil {
+		t.Fatalf("delete was blocked by an earlier interrupted one: %v", err)
+	}
+	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Fatalf("husk still present: %v", err)
+	}
+}
+
+// A husk carries a full instance directory, so anything walking instances by
+// directory name would otherwise resurrect what delete removed.
+func TestInstanceIDsSkipHusks(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	dir := newTestInstance(t, root, "aaaa00000012", "live", "var-data")
+	newTestInstance(t, root, ".aaaa00000013.deleting", "husk", "var-data")
+
+	ids, err := instanceIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "aaaa00000012" {
+		t.Fatalf("instanceIDs() = %v, want only the live instance beside %s", ids, dir)
+	}
+}
