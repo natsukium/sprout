@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -16,10 +17,20 @@ import (
 // handle→bridge→splice path runs without a VM. Every DIAL goes to one backend
 // whatever address it named, letting a test point guest ":80" at a random port.
 type fakeDaemon struct {
-	backend  string // host:port every DIAL is bridged to
-	booting  bool   // answer INFO with ready:false, as a daemon whose guest is still booting does
-	pid      int    // reported in INFO; readiness waits compare it against a supersededPID
-	sawTrack chan bool
+	backend string // host:port every DIAL is bridged to
+	booting bool   // answer INFO with ready:false, as a daemon whose guest is still booting does
+	pid     int    // reported in INFO; readiness waits compare it against a supersededPID
+	// vanishAfterInfo stands in for a stop landing between a router's
+	// readiness check and the dial that follows it.
+	vanishAfterInfo bool
+	// dropFirstDial hangs up on the first DIAL without a status line — the
+	// transient failure class a daemon handover produces mid-request.
+	dropFirstDial atomic.Bool
+	// dialErrReply, when set, answers every DIAL with this ERR reason — a
+	// daemon whose guest-side dial failed some way other than a refusal.
+	dialErrReply string
+	ln           net.Listener
+	sawTrack     chan bool
 }
 
 func (d *fakeDaemon) serve(t *testing.T, sockPath string) {
@@ -28,6 +39,7 @@ func (d *fakeDaemon) serve(t *testing.T, sockPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.ln = ln
 	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
@@ -52,11 +64,23 @@ func (d *fakeDaemon) handle(conn net.Conn) {
 		fmt.Fprint(conn, "OK\n")
 	case "INFO":
 		fmt.Fprintf(conn, "OK {\"ready\":%t,\"name\":\"webapp\",\"guestIp\":\"127.0.0.1\",\"pid\":%d}\n", !d.booting, d.pid)
+		// Close unlinks the socket, so the next dial fails as it would
+		// against a daemon that has exited.
+		if d.vanishAfterInfo {
+			d.ln.Close()
+		}
 	case "DIAL":
 		_, track := splitDialArg(arg)
 		select {
 		case d.sawTrack <- track:
 		default:
+		}
+		if d.dropFirstDial.CompareAndSwap(true, false) {
+			return
+		}
+		if d.dialErrReply != "" {
+			fmt.Fprintf(conn, "ERR %s\n", d.dialErrReply)
+			return
 		}
 		guest, err := net.Dial("tcp", d.backend)
 		if err != nil {
@@ -118,8 +142,10 @@ func seedInstanceWith(t *testing.T, root, id, name string, d *fakeDaemon) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Bundle must name a path that exists: the router stats it to tell an
+	// instance it can start from one whose build is gone.
 	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
-		ID: id, Name: name, KeySource: "directory", GuestIP: "127.0.0.1",
+		ID: id, Name: name, KeySource: "directory", GuestIP: "127.0.0.1", Bundle: dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,6 +353,119 @@ func TestRouteGuestDownReturns502(t *testing.T) {
 	addr := startRouter(t, r)
 	if status := httpStatus(t, addr, "webapp.sprout.localhost"); status != "502" {
 		t.Errorf("status = %s, want 502", status)
+	}
+}
+
+// A dev server bound to the guest's 127.0.0.1 refuses the router exactly as a
+// closed port does, so the 502 has to name that trap next to the wrong-port one.
+func TestRouteGuestDownHintNamesTheLoopbackTrap(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstance(t, root, "abcd1234ef56", "webapp", deadBackend(t))
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	_, _, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
+	for _, want := range []string{"nothing answered on guest port 80", "0.0.0.0", "127.0.0.1", "sprout exec -i webapp"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("502 page does not mention %q:\n%s", want, body)
+		}
+	}
+}
+
+// A stop landing between the readiness check and the dial is not the guest
+// port being closed: the answer is the waking page, which recovers by itself.
+// A transient control failure — the daemon handing over during an in-place
+// `sprout up` — while the instance provably still answers INFO deserves one
+// more dial, not an error page a manual reload would have cleared.
+func TestRouteRetriesOnceAfterATransientControlFailure(t *testing.T) {
+	root := shortStateRoot(t)
+	d := &fakeDaemon{backend: startEchoBackend(t), sawTrack: make(chan bool, 1)}
+	d.dropFirstDial.Store(true)
+	seedInstanceWith(t, root, "abcd1234ef56", "webapp", d)
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	if body := httpGet(t, addr, "webapp.sprout.localhost"); !strings.Contains(body, "backend saw") {
+		t.Errorf("request did not reach the backend after the retry: %q", body)
+	}
+}
+
+// The daemon answers ERR for every way its dial can fail; only a refusal
+// proves a closed port. A timeout means the guest never answered at all, and
+// the closed-port page would misdirect debugging into dev-server config.
+func TestRouteGuestDialTimeoutIsNotBlamedOnThePort(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
+		&fakeDaemon{dialErrReply: "i/o timeout", sawTrack: make(chan bool, 1)})
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	status, _, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
+	if status != "502" {
+		t.Errorf("status = %s, want 502", status)
+	}
+	if strings.Contains(body, "nothing answered on guest port") {
+		t.Errorf("timeout page blames the guest port:\n%s", body)
+	}
+	if !strings.Contains(body, "i/o timeout") {
+		t.Errorf("page does not carry the daemon's reason:\n%s", body)
+	}
+}
+
+func TestRouteDaemonGoneMidRequestWakesInsteadOf502(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
+		&fakeDaemon{backend: startEchoBackend(t), vanishAfterInfo: true, sawTrack: make(chan bool, 1)})
+
+	woken := make(chan string, 1)
+	restore := wakeInstance
+	wakeInstance = func(id string) error { woken <- id; return nil }
+	t.Cleanup(func() { wakeInstance = restore })
+
+	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	status, head, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
+	if status != "503" {
+		t.Errorf("status = %s, want 503; body:\n%s", status, body)
+	}
+	if !strings.Contains(head, "Refresh: 2") {
+		t.Errorf("response head lacks the Refresh header that brings the client back:\n%s", head)
+	}
+	if !strings.Contains(body, "Waking") {
+		t.Errorf("body is not the waking interstitial: %q", body)
+	}
+	select {
+	case id := <-woken:
+		if id != "abcd1234ef56" {
+			t.Errorf("woke %q, want the instance that went away", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("no wake was started for the instance that went away")
+	}
+}
+
+// The log carries the daemon's own reason, which is what separates a closed
+// guest port from a control socket that never answered.
+func TestRouteVerboseLogsWhyTheGuestDialFailed(t *testing.T) {
+	root := shortStateRoot(t)
+	seedInstance(t, root, "abcd1234ef56", "webapp", deadBackend(t))
+
+	r := &router{domain: "sprout.localhost", wake: true, verbose: true, waking: map[string]bool{}}
+	addr := startRouter(t, r)
+
+	logged := captureStderr(t, func() {
+		if status := httpStatus(t, addr, "webapp.sprout.localhost"); status != "502" {
+			t.Fatalf("status = %s, want 502", status)
+		}
+	})
+	for _, want := range []string{"guest:80", "connection refused"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log line does not mention %q:\n%s", want, logged)
+		}
 	}
 }
 

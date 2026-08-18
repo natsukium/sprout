@@ -167,6 +167,42 @@ A bridged line is logged before the splice begins, so it names the target
 rather than the outcome: once the guest owns the response, its status is what
 the router no longer sees.
 
+## Nothing answered on the guest port
+
+A 502 from the router (`"feat-login" is running but nothing answered on guest
+port 80`) is narrow by construction: the instance's daemon answered, and the
+address it dialed on your behalf refused the connection. The instance is up;
+the port is not. A guest that never answered the dial at all — hung, or its
+network wedged — gets a different 502 carrying the daemon's own reason (`i/o
+timeout`), because a refusal is the only failure that says anything about the
+port.
+
+Two things produce it, and the second is the one that looks impossible. The
+port may simply be the wrong one — the name alone targets guest port 80, so a
+dev server on 5173 needs `http://5173.<name>.<domain>/`. Or the server is on
+the right port but bound to the guest's own `127.0.0.1`, which many dev
+servers do by default: the router arrives over the guest's network interface,
+so a loopback-only listener refuses it exactly as a closed port would. Bind
+`0.0.0.0` inside the guest (`vite --host`, `next dev -H 0.0.0.0`, `rails s -b
+0.0.0.0`). What is actually listening, and on which address, settles it:
+
+```console
+$ sprout exec -i feat-login -- ss -ltnp
+State   Recv-Q  Send-Q  Local Address:Port
+LISTEN  0       511         127.0.0.1:5173      users:(("node",pid=812,fd=23))
+```
+
+A stop that lands mid-request is not this error. If the instance goes away
+between the router's readiness check and the dial — an idle auto-stop, a
+`sprout stop` from another terminal — the answer is the waking page, which
+reloads and brings the instance back, not a 502 claiming it is running.
+`--verbose` carries the guest-side reason for every dial that did fail, so the
+two are told apart in the log as well:
+
+```console
+route: feat-login.sprout.localhost:8080 "GET / HTTP/1.1" -> "feat/login" (152f2dadd3c6) guest:80 refused the connection: connection was refused (502)
+```
+
 ## Waking a stopped instance
 
 A request boots an idle-stopped instance, but does not wait for it. It returns
@@ -296,8 +332,9 @@ Sixty attempts two seconds apart give the wake two minutes, then fail rather
 than hang the script on an instance that never comes up. When the bound
 trips, the last status separates two problems waiting treats alike: a 503 is
 a boot or readiness hook still in progress (`sprout logs` shows where it
-stands), while a persistent 502 means the instance is up but nothing listens
-on the guest port, which more waiting does not fix.
+stands), while a 502 means the instance is up but nothing listens on the guest
+port ([above](#nothing-answered-on-the-guest-port)), which more waiting does
+not fix.
 
 `--no-wake` is not a substitute here: it returns 503 forever, until someone
 runs `sprout start`.

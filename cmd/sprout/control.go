@@ -55,7 +55,7 @@ func controlRequest(id, command string) (string, error) {
 	_, line, err := controlRoundTrip(conn, command)
 	if err != nil {
 		if errors.Is(err, errControlRejected) {
-			return "", fmt.Errorf("control: %s", line)
+			return "", fmt.Errorf("control: %s", controlReason(line))
 		}
 		return "", err
 	}
@@ -76,11 +76,30 @@ func dialHandshake(conn net.Conn, addr string) (*bufio.Reader, error) {
 	r, line, err := controlRoundTrip(conn, "DIAL "+addr)
 	if err != nil {
 		if errors.Is(err, errControlRejected) {
-			return nil, fmt.Errorf("dial %s: %s", addr, line)
+			return nil, &controlRejectedError{addr: addr, reply: line}
 		}
 		return nil, err
 	}
 	return r, nil
+}
+
+// A refusal came back from the address the daemon dialed, so unlike every
+// other dial failure it proves the daemon itself was there.
+type controlRejectedError struct {
+	addr  string
+	reply string
+}
+
+func (e *controlRejectedError) Error() string { return fmt.Sprintf("dial %s: %s", e.addr, e.reply) }
+
+func (e *controlRejectedError) Unwrap() error { return errControlRejected }
+
+func (e *controlRejectedError) reason() string {
+	return controlReason(e.reply)
+}
+
+func controlReason(reply string) string {
+	return strings.TrimSpace(strings.TrimPrefix(reply, "ERR"))
 }
 
 type controlInfo struct {

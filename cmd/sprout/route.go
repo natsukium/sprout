@@ -366,36 +366,41 @@ func (r *router) handle(conn net.Conn) {
 
 func (r *router) serveInstance(conn net.Conn, br *bufio.Reader, head []byte, host, id string, gport int) {
 	state, info := r.ensureReady(id)
-	switch state {
-	case readyStopped:
-		r.logRequest(host, head, instanceLog(id)+" is stopped (503)")
-		r.writeError(conn, http.StatusServiceUnavailable,
-			fmt.Sprintf("Instance %q is stopped", displayForID(id)),
-			"Start it with <code>sprout start</code>, or drop <code>--no-wake</code> so the router boots it on demand.")
-		return
-	case readyGone:
-		r.logRequest(host, head, instanceLog(id)+" has no build to boot (503)")
-		r.writeError(conn, http.StatusServiceUnavailable,
-			fmt.Sprintf("The build for %q is no longer in the Nix store", displayForID(id)),
-			"Run <code>sprout up</code> in its worktree to rebuild and boot it.")
-		return
-	case readyWaking:
-		r.logRequest(host, head, instanceLog(id)+" is still booting (503)")
-		r.writeWaking(conn, displayForID(id))
+	if state != readyOK {
+		r.writeNotReady(conn, head, host, id, "", state)
 		return
 	}
 	r.bridge(conn, br, head, host, id, info, gport)
+}
+
+func (r *router) writeNotReady(conn net.Conn, head []byte, host, id, note string, state readyState) {
+	switch state {
+	case readyStopped:
+		r.logRequest(host, head, note+instanceLog(id)+" is stopped (503)")
+		r.writeError(conn, http.StatusServiceUnavailable,
+			fmt.Sprintf("Instance %q is stopped", displayForID(id)),
+			"Start it with <code>sprout start</code>, or drop <code>--no-wake</code> so the router boots it on demand.")
+	case readyGone:
+		r.logRequest(host, head, note+instanceLog(id)+" has no build to boot (503)")
+		r.writeError(conn, http.StatusServiceUnavailable,
+			fmt.Sprintf("The build for %q is no longer in the Nix store", displayForID(id)),
+			"Run <code>sprout up</code> in its worktree to rebuild and boot it.")
+	case readyWaking:
+		r.logRequest(host, head, note+instanceLog(id)+" is still booting (503)")
+		r.writeWaking(conn, displayForID(id))
+	}
+	// No default: a state this switch does not know closes the connection
+	// with nothing written, where a default would dress it up as an
+	// endlessly reloading "still booting".
 }
 
 func (r *router) bridge(client net.Conn, br *bufio.Reader, head []byte, host, id string, info *controlInfo, gport int) {
 	guestAddr := net.JoinHostPort(info.GuestIP, strconv.Itoa(gport))
 	guest, err := dialGuest(id, guestAddr, true)
 	if err != nil {
-		r.logRequest(host, head, fmt.Sprintf("%s guest:%d refused the connection (502)", instanceLog(id), gport))
-		r.writeError(client, http.StatusBadGateway,
-			fmt.Sprintf("%q is running but nothing answered on guest port %d", displayForID(id), gport),
-			"Is the server listening on that port inside the VM? Add a <code>&lt;port&gt;.</code> prefix to reach a different one.")
-		return
+		if guest = r.recoverDialFailure(client, head, host, id, guestAddr, gport, err); guest == nil {
+			return
+		}
 	}
 	defer guest.Close()
 	// Before the splice: after it the guest owns the response and its status
@@ -410,6 +415,75 @@ func (r *router) bridge(client net.Conn, br *bufio.Reader, head []byte, host, id
 	// From br, not client: sniffHost may have buffered body bytes past the
 	// head, which reading client directly would drop.
 	pipe(bufferedConn{Conn: client, r: br}, guest)
+}
+
+// Only a daemon reply says anything about the guest; any other failure means
+// the daemon did not answer, which is usually an instance stopped between the
+// readiness check above and here. Answering that with the guest-port 502 both
+// claims something untrue and strands the client on a page that never
+// reloads, where the waking page would have brought it back by itself.
+//
+// Returns a live guest connection when a retry recovered one, nil after
+// writing an error page.
+func (r *router) recoverDialFailure(conn net.Conn, head []byte, host, id, guestAddr string, gport int, err error) net.Conn {
+	var rejected *controlRejectedError
+	if errors.As(err, &rejected) {
+		r.writeDialRejected(conn, head, host, id, gport, rejected)
+		return nil
+	}
+	if state, _ := r.ensureReady(id); state != readyOK {
+		r.writeNotReady(conn, head, host, id, fmt.Sprintf("control socket stopped answering mid-request (%v), ", err), state)
+		return nil
+	}
+	// The recheck answered INFO over a connection as fresh as the one that
+	// just failed, which proves the failure transient — typically a daemon
+	// handover during an in-place `sprout up`. One more dial absorbs exactly
+	// the class the recheck detected; a second failure falls through to the
+	// error page, so this cannot loop.
+	guest, retryErr := dialGuest(id, guestAddr, true)
+	if retryErr == nil {
+		return guest
+	}
+	if errors.As(retryErr, &rejected) {
+		r.writeDialRejected(conn, head, host, id, gport, rejected)
+		return nil
+	}
+	r.logRequest(host, head, fmt.Sprintf("%s control socket: %v (502)", instanceLog(id), retryErr))
+	r.writeError(conn, http.StatusBadGateway,
+		fmt.Sprintf("Could not reach %q through its control socket", displayForID(id)),
+		"<code>"+html.EscapeString(retryErr.Error())+"</code><br>The instance answered a moment ago, so this is the host side of the connection failing, not the guest.")
+	return nil
+}
+
+// The daemon replies ERR for every way its dial can fail, so only the reason
+// naming a refusal proves a closed (or loopback-bound) port; a timeout means
+// the guest never answered at all — a hung guest, a wedged network stack.
+func (r *router) writeDialRejected(conn net.Conn, head []byte, host, id string, gport int, rejected *controlRejectedError) {
+	name, reason := displayForID(id), rejected.reason()
+	if !isConnectionRefused(reason) {
+		r.logRequest(host, head, fmt.Sprintf("%s guest:%d dial failed: %s (502)", instanceLog(id), gport, reason))
+		r.writeError(conn, http.StatusBadGateway,
+			fmt.Sprintf("Dialing guest port %d of %q failed: %s", gport, name, reason),
+			"Not a refusal, so the guest did not answer at all; <code>sprout logs</code> shows what state it is in.")
+		return
+	}
+	r.logRequest(host, head, fmt.Sprintf("%s guest:%d refused the connection: %s (502)", instanceLog(id), gport, reason))
+	r.writeError(conn, http.StatusBadGateway,
+		fmt.Sprintf("%q is running but nothing answered on guest port %d", name, gport),
+		guestPortHint(name, gport))
+}
+
+// Matched on text because the control protocol carries only the daemon's
+// error string: gvisor's netstack says "connection was refused" where a
+// kernel stack says "connection refused".
+func isConnectionRefused(reason string) bool {
+	return strings.Contains(strings.ToLower(reason), "refused")
+}
+
+func guestPortHint(name string, gport int) string {
+	return fmt.Sprintf("Is a server listening on port %d inside the VM, bound to <code>0.0.0.0</code> rather than <code>127.0.0.1</code>? "+
+		"Check with <code>sprout exec -i %s -- ss -ltnp</code>, or add a <code>&lt;port&gt;.</code> prefix to the hostname to reach a different port.",
+		gport, html.EscapeString(name))
 }
 
 // The returned conn owns the control connection: closing it closes both.
@@ -495,8 +569,9 @@ func (r *router) startWake(id string) {
 
 // Blocks until the VM answers, so startWake's entry covers the whole boot.
 // Silent: nothing reads a router's stdout, and the failure a request cares
-// about surfaces on the interstitial instead.
-func wakeInstance(id string) error {
+// about surfaces on the interstitial instead. A variable so a test can reach
+// the pages a wake leads to without booting a VM.
+var wakeInstance = func(id string) error {
 	return bootDetached(id, startChildArgs(id), 0, "boot", nil)
 }
 
