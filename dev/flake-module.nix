@@ -27,6 +27,7 @@
 
       devShells.default = pkgs.mkShell {
         packages = [
+          pkgs.git-cliff
           pkgs.go
           pkgs.gopls
           pkgs.prek

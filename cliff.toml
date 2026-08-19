@@ -1,0 +1,49 @@
+[changelog]
+header = """
+# Changelog
+
+Notable changes per release, for someone upgrading a pinned flake input.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+`sprout` is in its 0.x.y pre-release line, so the CLI and Nix options may
+change between releases (see
+[compatibility and release policy](docs/reference/compatibility.md)).
+"""
+body = """
+{% if version %}## [{{ version }}]{% if previous.version %}(https://github.com/natsukium/sprout/compare/{{ previous.version }}...{{ version }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}{% else %}## [unreleased]{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}{% endfor %}
+{% endfor %}
+"""
+# --prepend needs the blank line between the last entry and the previous
+# release's heading, and trimming eats it.
+trim = false
+postprocessors = [
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/natsukium/sprout/pull/${1}))" },
+]
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+filter_commits = true
+# Tags are bare version numbers (0.1.0), not v-prefixed.
+tag_pattern = "[0-9]*"
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^revert", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", skip = true },
+  { message = "^test", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = "^chore", skip = true },
+]
+
+[bump]
+# A 0.x line has no compatibility promise to break (docs/reference/compatibility.md),
+# so a `feat!:` is a minor here, not the 1.0.0 the default would propose.
+breaking_always_bump_major = false
+features_always_bump_minor = true
