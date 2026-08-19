@@ -65,7 +65,7 @@ someone else's, remove it and retry.
 
 `instance.json` is schema version 1. sprout rejects an instance record with an
 unsupported version before touching its runner or volume. There is no
-in-place migration in the 0.1 release; keep a copy of important guest data
+in-place migration in the 0.x.y line; keep a copy of important guest data
 before deleting a record and recreating it with `sprout up`.
 
 Shared and project build caches live under `~/.cache/sprout/` (or

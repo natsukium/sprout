@@ -188,8 +188,9 @@ running HTTP services by instance name; start it with
 ## Scope and status
 
 `sprout` supports Apple Silicon macOS and `aarch64-linux` guests. It is in the
-0.1.0 pre-release line, so the CLI and configuration may change between
-releases. See the [compatibility and release policy](docs/reference/compatibility.md).
+0.x.y pre-release line, so the CLI and configuration may change between
+releases. See the [changelog](CHANGELOG.md) for what each release changed, and
+the [compatibility and release policy](docs/reference/compatibility.md).
 
 `sprout` is a development environment, not a sandbox for untrusted code. With
 `workspace = true`, root in the guest can modify the checkout and its Git
