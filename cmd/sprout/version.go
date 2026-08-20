@@ -10,7 +10,7 @@ import (
 // The single home of the release number: the Nix build parses this constant
 // for its package version, so a plain `go build` and a Nix build report the
 // same line.
-const releaseVersion = "0.1.0"
+const releaseVersion = "0.1.1"
 
 // Injected at build time via -ldflags.
 var version string

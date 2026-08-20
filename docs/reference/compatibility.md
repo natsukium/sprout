@@ -1,6 +1,6 @@
 # Compatibility and release policy
 
-`sprout` is in the 0.1.0 pre-release line. The host platform supported by this
+`sprout` is in the 0.x.y pre-release line. The host platform supported by this
 line is Apple Silicon macOS with an `aarch64-linux` Nix builder. Other host
 architectures and guests are not part of the supported contract yet.
 
@@ -22,6 +22,6 @@ flake can name a cache scope or credential strategy the installed binary has
 no case for, which fails at `up` with the unknown value quoted rather than as
 a version mismatch. Upgrade the binary to match the flake input.
 
-The version is reported as `0.1.0-<revision>`, with the source revision
+The version is reported as `<version>-<revision>`, with the source revision
 always appended: no build claims the bare release number. `sprout version` is
 the authoritative value for the binary being executed.
