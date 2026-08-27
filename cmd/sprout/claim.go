@@ -35,6 +35,29 @@ func acquireLifecycleLock(id string) (*os.File, error) {
 	return f, nil
 }
 
+// Canonical ID order whatever order the caller names them in: with blocking
+// acquisition, a fixed global order is the only thing preventing two holders
+// from waiting on each other forever.
+func acquireLifecyclePair(a, b string) (lockA, lockB *os.File, err error) {
+	first, second := a, b
+	if second < first {
+		first, second = second, first
+	}
+	lockFirst, err := acquireLifecycleLock(first)
+	if err != nil {
+		return nil, nil, err
+	}
+	lockSecond, err := acquireLifecycleLock(second)
+	if err != nil {
+		lockFirst.Close()
+		return nil, nil, err
+	}
+	if first == a {
+		return lockFirst, lockSecond, nil
+	}
+	return lockSecond, lockFirst, nil
+}
+
 // The caller must hold the lifecycle lock: it keeps the pathname from being
 // swapped between the open and the verification below.
 func claimInstanceLocked(dir string, wait time.Duration, serving func() bool) (*os.File, error) {
