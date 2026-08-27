@@ -54,11 +54,7 @@ func cmdFork(selector string, live bool, newName string) error {
 	if selector == "" && newName == "" {
 		return usagef("fork needs a source or a destination that is not this environment: select the source with -i, or name the new one — sprout fork NEWNAME")
 	}
-	src, srcInst, srcDir, err := resolveAndLoad(selector)
-	if err != nil {
-		return err
-	}
-	srcImg, err := liveImage(srcDir, src.Display())
+	src, _, srcDir, err := resolveAndLoad(selector)
 	if err != nil {
 		return err
 	}
@@ -73,6 +69,7 @@ func cmdFork(selector string, live bool, newName string) error {
 	if dst.ID == src.ID {
 		return usagef("instance %q would fork onto itself; select a different source with -i, or name the new environment: sprout fork NEWNAME", src.Display())
 	}
+
 	srcLC, dstLC, err := acquireLifecyclePair(src.ID, dst.ID)
 	if err != nil {
 		return err
@@ -115,6 +112,18 @@ func cmdFork(selector string, live bool, newName string) error {
 		// not block every lifecycle waiter. The live path has no boot lock,
 		// so there the lifecycle lock stays held through the copy instead.
 		srcLC.Close()
+	}
+
+	// The pre-lock record could predate a restore or a rebuild.
+	srcInst, _, err := loadInstance(src.ID)
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	srcImg, err := liveImage(srcDir, src.Display())
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
 	}
 
 	inst := dst.newInstance()
