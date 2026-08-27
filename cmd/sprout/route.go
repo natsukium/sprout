@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -549,7 +550,9 @@ func (r *router) ensureReady(id string) (readyState, *controlInfo) {
 	}
 	// A start with no build on disk can only fail; its own state keeps the
 	// interstitial from spinning forever on something that will never boot.
-	if inst, _, err := loadInstance(id); err == nil {
+	// Only an absolute path can prove absence: a relative legacy record would
+	// stat against the router's cwd.
+	if inst, _, err := loadInstance(id); err == nil && filepath.IsAbs(inst.Bundle) {
 		if _, statErr := os.Stat(inst.Bundle); statErr != nil {
 			return readyGone, nil
 		}

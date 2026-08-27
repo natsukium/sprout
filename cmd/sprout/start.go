@@ -89,6 +89,11 @@ func startHint(id, selector string) string {
 	if err != nil {
 		return ""
 	}
+	// A relative legacy path would stat against this caller's cwd; no hint
+	// beats a wrong one.
+	if !filepath.IsAbs(inst.Bundle) {
+		return ""
+	}
 	if _, err := os.Stat(inst.Bundle); err != nil {
 		return ""
 	}
