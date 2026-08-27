@@ -43,7 +43,20 @@ func startForeground(id *Identity) error {
 	if err != nil {
 		return err
 	}
-	lock, err := claimForBoot(id.ID, dir, false)
+	// Retained through reconcileRoots: its migration path publishes a token,
+	// which requires the lifecycle lock.
+	lc, err := acquireLifecycleLock(id.ID)
+	if err != nil {
+		return err
+	}
+	defer lc.Close()
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return &instanceNotFoundError{selector: id.ID}
+		}
+		return err
+	}
+	lock, err := claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id.ID) })
 	// `start` boots the bundle already on record, so any serving daemon is the
 	// state it asked for; converging a changed definition is `up`'s job.
 	if errors.Is(err, errInstanceNowServing) {
@@ -53,6 +66,12 @@ func startForeground(id *Identity) error {
 	if err != nil {
 		return err
 	}
+	// Swept here rather than left to the boot's cleanup, so a failed start
+	// does not exit with a SIGKILLed daemon's secrets still on disk.
+	if err := os.RemoveAll(credentialsDir(dir)); err != nil {
+		lock.Close()
+		return err
+	}
 	// Loaded under the claim: before it binds the incarnation, a concurrent
 	// delete or `up` can replace the record.
 	inst, _, err := loadInstance(id.ID)
@@ -60,10 +79,13 @@ func startForeground(id *Identity) error {
 		lock.Close()
 		return err
 	}
-	if _, err := os.Stat(inst.Bundle); err != nil {
+	// Lazy migration: a legacy record is resolved, pinned, and rewritten
+	// before anything reads the bundle.
+	if err := reconcileRoots(dir, inst); err != nil {
 		lock.Close()
-		return fmt.Errorf("build for %q is no longer in the store (%s); run `sprout up` to rebuild it", id.Display(), inst.Bundle)
+		return err
 	}
+	lc.Close()
 	manifest, err := loadManifest(filepath.Join(inst.Bundle, "manifest.json"))
 	if err != nil {
 		lock.Close()
