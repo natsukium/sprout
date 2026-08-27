@@ -406,15 +406,15 @@ func bootInstance(dir string, inst *Instance, manifest *Manifest) error {
 	if err := os.RemoveAll(credentialsDir(dir)); err != nil {
 		return err
 	}
+	// Registered before setup, not after: a setup failing on its second
+	// credential has already written its first, which needs the same cleanup.
+	defer os.RemoveAll(credentialsDir(dir))
 	// Before boot: a missing mount source or a failing materialize command
 	// should abort, not surface later as an empty mount or an unauthenticated
 	// tool.
 	if err := setupCredentials(manifest, subs, dataDir(dir)); err != nil {
 		return err
 	}
-	// Materialized credentials are Keychain secrets copied to disk; leaving
-	// them there after exit would defeat keeping them in the Keychain.
-	defer os.RemoveAll(credentialsDir(dir))
 	if err := addCacheSubstitutions(manifest, subs, inst.RepoRoot); err != nil {
 		return err
 	}
