@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 change between releases (see
 [compatibility and release policy](docs/reference/compatibility.md)).
 
+## [0.1.2](https://github.com/natsukium/sprout/compare/0.1.1...0.1.2) - 2026-08-28
+
+Every recorded bundle now holds a Nix GC root, so `nix store gc` can no longer
+collect the build a stopped, forked, or running instance depends on. Records
+written by earlier versions gain their root at their next boot.
+
+### Fixed
+
+- Remove partial credentials when their setup fails midway ([#10](https://github.com/natsukium/sprout/pull/10))
+- Bind every lock and confirmation to the instance incarnation it named ([#11](https://github.com/natsukium/sprout/pull/11))
+- Hold both instances' locks across seeding, in canonical ID order ([#12](https://github.com/natsukium/sprout/pull/12))
+- Protect every recorded bundle with a Nix GC root ([#13](https://github.com/natsukium/sprout/pull/13))
+
 ## [0.1.1](https://github.com/natsukium/sprout/compare/0.1.0...0.1.1) - 2026-08-20
 
 ### Changed
