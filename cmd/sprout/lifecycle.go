@@ -69,10 +69,19 @@ func stopOne(id string, behavior stopBehavior) error {
 	// Read once: every use below would otherwise re-read instance.json, and the
 	// record is deleted out from under the last of them by `delete`.
 	name := displayForID(id)
+	dir, err := instanceDir(id)
+	if err != nil {
+		return err
+	}
+	lc, err := acquireLifecycleLock(id)
+	if err != nil {
+		return err
+	}
+	defer lc.Close()
 	if !instanceRunning(id) {
 		// Also the state a SIGKILLed daemon leaves behind, so this is where a
 		// client sweeps the credentials its skipped defer stranded on disk.
-		sweepStaleCredentials(id)
+		sweepStaleCredentialsLocked(dir, 0)
 		if behavior.quietIfNotRunning {
 			return nil
 		}
@@ -85,6 +94,19 @@ func stopOne(id string, behavior stopBehavior) error {
 		}
 		return errors.New(msg)
 	}
+	if err := stopLocked(id, name); err != nil {
+		return err
+	}
+	sweepStaleCredentialsLocked(dir, 2*time.Second)
+	if behavior.reportStopped {
+		fmt.Printf("instance %q stopped\n", name)
+	}
+	return nil
+}
+
+// The caller holds the lifecycle lock, so this takes no locks and sweeps no
+// credentials — either would self-deadlock.
+func stopLocked(id, name string) error {
 	// A concurrent stop can tear the daemon down between the running check and
 	// this request, and a daemon already gone is the state STOP asked for.
 	if _, err := controlRequest(id, "STOP"); err != nil && instanceRunning(id) {
@@ -97,12 +119,6 @@ func stopOne(id string, behavior stopBehavior) error {
 	})
 	if !stopped {
 		return fmt.Errorf("instance %q did not stop within 60s", name)
-	}
-	// The daemon's own exit path already deleted them; this only matters when
-	// it died between dropping control and running its defers.
-	sweepStaleCredentials(id)
-	if behavior.reportStopped {
-		fmt.Printf("instance %q stopped\n", name)
 	}
 	return nil
 }

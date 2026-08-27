@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func expandTilde(path string) (string, error) {
@@ -89,14 +90,10 @@ func materializeCredential(c CredentialSpec, dataDir string) error {
 	return os.WriteFile(filepath.Join(dir, c.Name), out, 0o600)
 }
 
-// SIGKILL and host crashes bypass daemon cleanup. Sweep only while holding the
-// instance lock; a lock failure means a live daemon owns the credentials.
-func sweepStaleCredentials(id string) {
-	dir, err := instanceDir(id)
-	if err != nil {
-		return
-	}
-	lock, err := acquireInstanceLock(dir, 0)
+// SIGKILL and host crashes bypass daemon cleanup; a claim failure means a
+// live daemon owns the credentials. The caller holds the lifecycle lock.
+func sweepStaleCredentialsLocked(dir string, wait time.Duration) {
+	lock, err := claimInstanceLocked(dir, wait, nil)
 	if err != nil {
 		return
 	}

@@ -166,7 +166,7 @@ func TestSweepStaleCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sweepStaleCredentials(id)
+	sweepStaleCredentialsLocked(dir, 0)
 
 	if _, err := os.Stat(credDir); !os.IsNotExist(err) {
 		t.Fatal("stale credentials dir survived the sweep")
@@ -175,8 +175,8 @@ func TestSweepStaleCredentials(t *testing.T) {
 		t.Fatalf("sweep must not touch the rest of the data dir: %v", err)
 	}
 	// An instance with no state at all must stay a no-op, not create one.
-	sweepStaleCredentials("000000000000")
 	if noDir, err := instanceDir("000000000000"); err == nil {
+		sweepStaleCredentialsLocked(noDir, 0)
 		if _, err := os.Stat(noDir); !os.IsNotExist(err) {
 			t.Fatal("sweep created state for a nonexistent instance")
 		}
