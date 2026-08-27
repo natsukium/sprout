@@ -73,12 +73,21 @@ func cmdFork(selector string, live bool, newName string) error {
 	if dst.ID == src.ID {
 		return usagef("instance %q would fork onto itself; select a different source with -i, or name the new environment: sprout fork NEWNAME", src.Display())
 	}
-	lock, running, err := lockOrLive(srcDir, fmt.Sprintf("source instance %q", src.Display()), "fork", live)
+	lc, err := acquireLifecycleLock(src.ID)
+	if err != nil {
+		return err
+	}
+	defer lc.Close()
+	lock, running, err := claimOrLive(src.ID, srcDir, fmt.Sprintf("source instance %q", src.Display()), "fork", live)
 	if err != nil {
 		return err
 	}
 	if lock != nil {
 		defer lock.Close()
+		// The held boot lock keeps delete out transitively; a full copy must
+		// not block every lifecycle waiter. The live path has no boot lock,
+		// so there the lifecycle lock stays held through the copy instead.
+		lc.Close()
 	}
 
 	dstDir, err := instanceDir(dst.ID)

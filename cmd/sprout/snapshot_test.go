@@ -183,6 +183,68 @@ func TestSnapshotRefusesRunningInstance(t *testing.T) {
 	}
 }
 
+// Contention on the boot lock is not proof of a live daemon — a boot that
+// crashed before serving, or another sprout holding the instance, hold it the
+// same way — so --live must refuse unless control answers.
+func TestSnapshotLiveRefusesAHeldInstanceWithNoDaemon(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	id := "aaaa7777bbbb"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := newTestInstance(t, root, id, "feature", "data")
+
+	lock, err := acquireInstanceLock(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	err = cmdSnapshotCreate(id, true, "x")
+	if err == nil {
+		t.Fatal("snapshot --live succeeded with nothing answering control")
+	}
+	if !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("error should report the instance busy, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "is running") {
+		t.Fatalf("error asserts a daemon that never answered, got: %v", err)
+	}
+
+	err = cmdSnapshotCreate(id, false, "x")
+	if err == nil {
+		t.Fatal("snapshot without --live succeeded while the lock was held")
+	}
+	if !strings.Contains(err.Error(), "stop it first") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Deleting a snapshot reads and removes state inside the instance directory,
+// so it must not run while a daemon — or another sprout — holds the instance.
+func TestSnapshotDeleteRefusesAHeldInstance(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	id := "aaaa8888bbbb"
+	dir := newTestInstance(t, root, id, "feature", "live data")
+
+	if err := cmdSnapshotCreate(id, false, "snap"); err != nil {
+		t.Fatalf("snapshot create: %v", err)
+	}
+
+	lock, err := acquireInstanceLock(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	if err := cmdSnapshotDelete(id, "snap"); err == nil {
+		t.Fatal("snapshot delete succeeded while another process held the instance")
+	}
+	if _, err := os.Stat(snapshotDir(dir, "snap")); err != nil {
+		t.Fatalf("snapshot was removed despite the held lock: %v", err)
+	}
+}
+
 // The listing reads oldest to newest, so the last line is the newest rollback
 // point.
 func TestSnapshotLsOrdersByCreation(t *testing.T) {

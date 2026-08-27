@@ -9,19 +9,22 @@ import (
 )
 
 func TestForkLiveSucceedsOnCoW(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", root)
+	root := shortStateRoot(t)
 	work := t.TempDir()
 	t.Chdir(work)
 
 	srcID := "cccc2222dddd"
+	t.Cleanup(func() { removeSocketDir(srcID) })
 	srcDir := newTestInstance(t, root, srcID, "source", "running /var")
 
+	// Stand in for the daemon: the lock is held for its whole life, and the
+	// control socket answering is what licenses the live copy.
 	lock, err := acquireInstanceLock(srcDir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
+	(&fakeDaemon{}).serve(t, filepath.Join(srcDir, "control.sock"))
 
 	if err := cmdFork(srcID, true, "forked"); err != nil {
 		t.Fatalf("fork --live: %v", err)

@@ -9,22 +9,24 @@ import (
 	"testing"
 )
 
-// With the instance held as a running daemon holds it, --live still copies,
-// and records the result as crash-consistent so a later restore is not
+// With the instance held and answering as a running daemon does, --live still
+// copies, and records the result as crash-consistent so a later restore is not
 // mistaken for a clean one. darwin-only: without copy-on-write clones --live
 // is unavailable, and the honest outcome there is the refusal.
 func TestSnapshotLiveSucceedsOnCoW(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", root)
+	root := shortStateRoot(t)
 	id := "cccc1111dddd"
+	t.Cleanup(func() { removeSocketDir(id) })
 	dir := newTestInstance(t, root, id, "feature", "running /var")
 
-	// Stand in for the daemon, which holds this lock for its whole life.
+	// Stand in for the daemon: the lock is held for its whole life, and the
+	// control socket answering is what licenses the live copy.
 	lock, err := acquireInstanceLock(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
+	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
 
 	if err := cmdSnapshotCreate(id, true, "hot"); err != nil {
 		t.Fatalf("snapshot create --live: %v", err)

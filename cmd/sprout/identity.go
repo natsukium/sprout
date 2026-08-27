@@ -247,11 +247,11 @@ func instanceRecordExists(id string) bool {
 }
 
 func instanceIDs() ([]string, error) {
-	root, err := stateRoot()
+	root, err := instancesRoot()
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(filepath.Join(root, "instances"))
+	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}

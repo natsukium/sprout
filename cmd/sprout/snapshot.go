@@ -126,25 +126,37 @@ func liveImage(instDir, display string) (string, error) {
 
 // Unlike a PING probe, the lock leaves no window for a boot to slip in under
 // a var.img operation: a daemon holds it for its whole life.
-func lockIdleInstance(instDir, display string) (*os.File, error) {
-	lock, err := acquireInstanceLock(instDir, 0)
+func lockIdleInstance(id, display string) (*os.File, error) {
+	lock, err := claimInstance(id, 0, nil)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("instance %q is running, or another sprout process holds it; stop it first: %w", display, err)
 	}
 	return lock, nil
 }
 
 // The returned lock is nil when running, where the caller takes the
-// crash-consistent CoW path.
-func lockOrLive(instDir, what, verb string, live bool) (lock *os.File, running bool, err error) {
-	lock, lockErr := acquireInstanceLock(instDir, 0)
+// crash-consistent CoW path. On the live path the caller must keep holding
+// the lifecycle lock through the copy — nothing else pins the daemon.
+func claimOrLive(id, instDir, what, verb string, live bool) (lock *os.File, running bool, err error) {
+	lock, lockErr := claimInstanceLocked(instDir, 0, nil)
 	if lockErr == nil {
 		return lock, false, nil
 	}
-	if live {
-		return nil, true, nil
+	if errors.Is(lockErr, os.ErrNotExist) {
+		return nil, false, lockErr
 	}
-	return nil, false, fmt.Errorf("%s is running, or another sprout process holds it; stop it first, or pass --live to %s it as it runs: %w", what, verb, lockErr)
+	if !live {
+		return nil, false, fmt.Errorf("%s is running, or another sprout process holds it; stop it first, or pass --live to %s it as it runs: %w", what, verb, lockErr)
+	}
+	// Contention alone is not liveness: only an answering control socket
+	// licenses copying under a running daemon.
+	if !instanceRunning(id) {
+		return nil, false, fmt.Errorf("%s is busy (another sprout process holds it, but no daemon answers yet); retry shortly", what)
+	}
+	return nil, true, nil
 }
 
 // A stopped instance's image is at rest, so either method is safe. A running
@@ -202,7 +214,26 @@ func newSnapshotCreateCmd() *cobra.Command {
 }
 
 func cmdSnapshotCreate(selector string, live bool, snapName string) error {
-	id, inst, dir, err := resolveSnapshotTarget(selector, snapName)
+	id, _, dir, err := resolveSnapshotTarget(selector, snapName)
+	if err != nil {
+		return err
+	}
+	lc, err := acquireLifecycleLock(id.ID)
+	if err != nil {
+		return err
+	}
+	defer lc.Close()
+	lock, running, err := claimOrLive(id.ID, dir, fmt.Sprintf("instance %q", id.Display()), "snapshot", live)
+	if err != nil {
+		return err
+	}
+	if lock != nil {
+		defer lock.Close()
+		// The held boot lock keeps delete out transitively; a full copy must
+		// not block every lifecycle waiter.
+		lc.Close()
+	}
+	inst, _, err := loadInstance(id.ID)
 	if err != nil {
 		return err
 	}
@@ -212,14 +243,6 @@ func cmdSnapshotCreate(selector string, live bool, snapName string) error {
 	}
 	if _, err := os.Stat(snapshotDir(dir, snapName)); err == nil {
 		return fmt.Errorf("instance %q already has a snapshot named %q", id.Display(), snapName)
-	}
-
-	lock, running, err := lockOrLive(dir, fmt.Sprintf("instance %q", id.Display()), "snapshot", live)
-	if err != nil {
-		return err
-	}
-	if lock != nil {
-		defer lock.Close()
 	}
 
 	target := snapshotDir(dir, snapName)
@@ -336,6 +359,15 @@ func cmdSnapshotDelete(selector, snapName string) error {
 	if err := requireSnapshot(target, id, snapName); err != nil {
 		return err
 	}
+	// A restore must not read this snapshot mid-removal.
+	lock, err := lockIdleInstance(id.ID, id.Display())
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := requireSnapshot(target, id, snapName); err != nil {
+		return err
+	}
 	// No confirmation, unlike `sprout delete`: the instance and its live /var
 	// are untouched, so the worst case is a redo.
 	if err := os.RemoveAll(target); err != nil {
@@ -362,7 +394,7 @@ func newSnapshotRestoreCmd() *cobra.Command {
 }
 
 func cmdSnapshotRestore(selector string, force bool, snapName string) error {
-	id, inst, dir, err := resolveSnapshotTarget(selector, snapName)
+	id, _, dir, err := resolveSnapshotTarget(selector, snapName)
 	if err != nil {
 		return err
 	}
@@ -373,11 +405,20 @@ func cmdSnapshotRestore(selector string, force bool, snapName string) error {
 
 	// No --live escape hatch, unlike `create`: swapping the disk under a
 	// running VM corrupts both the image and the guest's page cache.
-	lock, err := lockIdleInstance(dir, id.Display())
+	lock, err := lockIdleInstance(id.ID, id.Display())
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
+	// Reloaded under the claim: a concurrent restore or `up` may have
+	// rewritten the record since the pre-claim reads.
+	inst, _, err := loadInstance(id.ID)
+	if err != nil {
+		return err
+	}
+	if err := requireSnapshot(src, id, snapName); err != nil {
+		return err
+	}
 
 	if !force && !confirmYes(fmt.Sprintf("replace instance %q's current /var with snapshot %q? the current /var is discarded", id.Display(), snapName)) {
 		return errAborted

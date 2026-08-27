@@ -587,7 +587,7 @@ func (r *router) startWake(id string) {
 // about surfaces on the interstitial instead. A variable so a test can reach
 // the pages a wake leads to without booting a VM.
 var wakeInstance = func(id string) error {
-	return bootDetached(id, startChildArgs(id), 0, "boot", nil)
+	return bootDetached(id, startChildArgs(id), 0, "boot", false, nil)
 }
 
 type routeKind int

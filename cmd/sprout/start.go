@@ -35,31 +35,41 @@ func newStartCmd() *cobra.Command {
 }
 
 func startForeground(id *Identity) error {
-	inst, dir, err := loadInstance(id.ID)
-	if err != nil {
-		return err
-	}
-
 	if instanceRunning(id.ID) {
 		fmt.Printf("instance %q is already running\n", id.Display())
 		return nil
 	}
-
-	if _, err := os.Stat(inst.Bundle); err != nil {
-		return fmt.Errorf("build for %q is no longer in the store (%s); run `sprout up` to rebuild it", id.Display(), inst.Bundle)
-	}
-	manifest, err := loadManifest(filepath.Join(inst.Bundle, "manifest.json"))
+	dir, err := instanceDir(id.ID)
 	if err != nil {
 		return err
 	}
-	err = bootInstance(dir, inst, manifest)
+	lock, err := claimForBoot(id.ID, dir, false)
 	// `start` boots the bundle already on record, so any serving daemon is the
 	// state it asked for; converging a changed definition is `up`'s job.
 	if errors.Is(err, errInstanceNowServing) {
 		fmt.Printf("instance %q is already running\n", id.Display())
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	// Loaded under the claim: before it binds the incarnation, a concurrent
+	// delete or `up` can replace the record.
+	inst, _, err := loadInstance(id.ID)
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	if _, err := os.Stat(inst.Bundle); err != nil {
+		lock.Close()
+		return fmt.Errorf("build for %q is no longer in the store (%s); run `sprout up` to rebuild it", id.Display(), inst.Bundle)
+	}
+	manifest, err := loadManifest(filepath.Join(inst.Bundle, "manifest.json"))
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	return bootInstanceLocked(dir, inst, manifest, lock)
 }
 
 func stoppedError(id *Identity, selector string) error {
@@ -94,7 +104,7 @@ func startDetached(selector string) error {
 	if _, _, err := loadInstance(id.ID); err != nil {
 		return err
 	}
-	return launchDetached(id, selector, startChildArgs(id.ID), "starting", "boot")
+	return launchDetached(id, selector, startChildArgs(id.ID), "starting", "boot", false)
 }
 
 // --foreground prevents each detached child from spawning another child.

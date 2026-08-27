@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -320,6 +322,126 @@ func TestPruneSkipsLockedOrphan(t *testing.T) {
 	}
 	if _, err := os.Stat(freeDir); !os.IsNotExist(err) {
 		t.Fatalf("unlocked orphan still present: %v", err)
+	}
+}
+
+// Runs action the first time the prompt is read, then answers "y": the read is
+// what marks the unlocked window between the confirmation and the removal, so
+// an action placed here lands exactly where a racing command would.
+type actingReader struct {
+	once   sync.Once
+	action func()
+	answer io.Reader
+}
+
+func (r *actingReader) Read(p []byte) (int, error) {
+	r.once.Do(r.action)
+	return r.answer.Read(p)
+}
+
+func answerYesAfter(t *testing.T, action func()) {
+	t.Helper()
+	confirmIn = &actingReader{action: action, answer: strings.NewReader("y\n")}
+	t.Cleanup(func() { confirmIn = os.Stdin })
+}
+
+// Stands in for a delete-and-recreate by another process: the pathname is the
+// one that was confirmed, the directory behind it is a different instance.
+func swapInstanceDir(t *testing.T, root, id, dir, newName string) {
+	t.Helper()
+	if err := os.Rename(dir, filepath.Join(root, "swapped-away-"+id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
+		ID: id, Name: newName, KeySource: "directory", Workspace: root,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// KeySource stays "directory", so orphan classification turns purely on
+// whether the workspace path exists.
+func pointWorkspaceAt(t *testing.T, id, workspace string) {
+	t.Helper()
+	inst, dir, err := loadInstance(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.Workspace = workspace
+	if err := writeJSON(filepath.Join(dir, "instance.json"), inst); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The user confirmed the destruction of one instance's /var; if that instance
+// is replaced at the same path before the removal runs, the delete must abort
+// rather than destroy the newcomer's volume.
+func TestDeleteAbortsOnASwappedIncarnation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	const id = "aaaa00000020"
+	dir := newTestInstance(t, root, id, "confirmed", "var-data")
+
+	answerYesAfter(t, func() { swapInstanceDir(t, root, id, dir, "recreated") })
+
+	err := deleteInstances([]string{id}, false)
+	if err == nil {
+		t.Fatal("delete removed an instance that was replaced after the confirmation")
+	}
+	if !strings.Contains(err.Error(), "changed since confirmation") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "instance.json")); err != nil {
+		t.Fatalf("the recreated instance was deleted anyway: %v", err)
+	}
+}
+
+// The same swap under prune is one instance's problem, not the sweep's: the
+// replaced instance is skipped and the command still succeeds.
+func TestPruneSkipsASwappedIncarnation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	const id = "aaaa00000021"
+	dir := newTestInstance(t, root, id, "orphan", "var-data")
+	pointWorkspaceAt(t, id, filepath.Join(root, "workspace-gone"))
+
+	answerYesAfter(t, func() { swapInstanceDir(t, root, id, dir, "recreated") })
+
+	out := captureStdout(t, func() error { return cmdPrune(false) })
+	if !strings.Contains(out, "removed 0 instance(s)") {
+		t.Errorf("prune reported %q, want nothing removed", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "instance.json")); err != nil {
+		t.Fatalf("the recreated instance was pruned: %v", err)
+	}
+}
+
+// Orphan classification ran before the prompt; a branch that comes back while
+// the user answers makes this a live instance again, and only the recheck
+// under the claim can see it.
+func TestPruneKeepsAnInstanceThatIsNoLongerOrphaned(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	const id = "aaaa00000022"
+	dir := newTestInstance(t, root, id, "reclaimed", "var-data")
+	workspace := filepath.Join(root, "workspace-gone")
+	pointWorkspaceAt(t, id, workspace)
+
+	answerYesAfter(t, func() {
+		if err := os.MkdirAll(workspace, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	out := captureStdout(t, func() error { return cmdPrune(false) })
+	if !strings.Contains(out, "removed 0 instance(s)") {
+		t.Errorf("prune reported %q, want nothing removed", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "var.img")); err != nil {
+		t.Fatalf("an instance that stopped being orphaned was pruned: %v", err)
 	}
 }
 

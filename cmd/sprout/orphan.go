@@ -28,15 +28,6 @@ func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
 
 var errInstanceNowServing = errors.New("another daemon started serving this instance")
 
-// A winning daemon holds the lock from the start of its boot but answers
-// control only once its runner is up, so a booter that lost the race would
-// wait out the whole lock timeout and fail against a healthy winner. Checking
-// PING once before the wait would not close that window — only checking
-// *during* it does.
-func acquireBootLock(dir, id string, wait time.Duration) (*os.File, error) {
-	return lockInstance(dir, wait, func() bool { return instanceRunning(id) })
-}
-
 func lockInstance(dir string, wait time.Duration, serving func() bool) (*os.File, error) {
 	path := filepath.Join(dir, "daemon.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
