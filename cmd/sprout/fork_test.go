@@ -96,6 +96,37 @@ func TestForkRefusesUnbootedSource(t *testing.T) {
 	}
 }
 
+// Same rule as `snapshot --live`: a held boot lock with nothing answering
+// control is a busy source, not a running one, and copying its image would
+// race whoever holds it.
+func TestForkLiveRefusesAHeldSourceWithNoDaemon(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	work := t.TempDir()
+	t.Chdir(work)
+
+	srcID := "eeee2222ffff"
+	t.Cleanup(func() { removeSocketDir(srcID) })
+	srcDir := newTestInstance(t, root, srcID, "source", "running /var")
+
+	lock, err := acquireInstanceLock(srcDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	err = cmdFork(srcID, true, "forked")
+	if err == nil {
+		t.Fatal("fork --live succeeded with nothing answering control")
+	}
+	if !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("error should report the source busy, got: %v", err)
+	}
+	if ids, _ := instancesNamed("forked"); len(ids) != 0 {
+		t.Fatalf("a refused fork left state behind: %v", ids)
+	}
+}
+
 // A bare `sprout fork` has both source and destination resolving to this branch,
 // so it can only be a mistake. The error has to say what to supply, since
 // "would fork onto itself" alone leaves the user with no next command.
