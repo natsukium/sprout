@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Only `up` and `fork` may bring an instance directory into existence, so a
@@ -27,6 +28,53 @@ func TestClaimInstanceNeverCreatesTheDirectory(t *testing.T) {
 	dir := filepath.Join(root, "sprout", "instances", id)
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("claimInstance created %s (stat err = %v)", dir, err)
+	}
+}
+
+// Two callers naming the same two instances in opposite orders must both keep
+// making progress; taking the pair in the caller's order instead of a canonical
+// one would leave each waiting on the lock the other already holds. The
+// returned locks still follow the argument order, whichever order they were
+// taken in.
+func TestAcquireLifecyclePairDoesNotDeadlockOnOppositeOrders(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const (
+		lower  = "aaaa00000001"
+		higher = "aaaa00000002"
+	)
+
+	pairOnce := func(a, b string) {
+		lockA, lockB, err := acquireLifecyclePair(a, b)
+		if err != nil {
+			t.Errorf("acquireLifecyclePair(%s, %s): %v", a, b, err)
+			return
+		}
+		defer lockB.Close()
+		defer lockA.Close()
+		if got := filepath.Base(lockA.Name()); got != ".lifecycle-"+a {
+			t.Errorf("first returned lock = %s, want the one for the first argument %s", got, a)
+		}
+		if got := filepath.Base(lockB.Name()); got != ".lifecycle-"+b {
+			t.Errorf("second returned lock = %s, want the one for the second argument %s", got, b)
+		}
+	}
+
+	const rounds = 50
+	done := make(chan struct{}, 2)
+	for _, order := range [][2]string{{lower, higher}, {higher, lower}} {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range rounds {
+				pairOnce(order[0], order[1])
+			}
+		}()
+	}
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("opposite-order callers of acquireLifecyclePair deadlocked")
+		}
 	}
 }
 

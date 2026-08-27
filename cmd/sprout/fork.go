@@ -54,11 +54,7 @@ func cmdFork(selector string, live bool, newName string) error {
 	if selector == "" && newName == "" {
 		return usagef("fork needs a source or a destination that is not this environment: select the source with -i, or name the new one — sprout fork NEWNAME")
 	}
-	src, srcInst, srcDir, err := resolveAndLoad(selector)
-	if err != nil {
-		return err
-	}
-	srcImg, err := liveImage(srcDir, src.Display())
+	src, _, srcDir, err := resolveAndLoad(selector)
 	if err != nil {
 		return err
 	}
@@ -73,30 +69,20 @@ func cmdFork(selector string, live bool, newName string) error {
 	if dst.ID == src.ID {
 		return usagef("instance %q would fork onto itself; select a different source with -i, or name the new environment: sprout fork NEWNAME", src.Display())
 	}
-	lc, err := acquireLifecycleLock(src.ID)
+
+	srcLC, dstLC, err := acquireLifecyclePair(src.ID, dst.ID)
 	if err != nil {
 		return err
 	}
-	defer lc.Close()
-	lock, running, err := claimOrLive(src.ID, srcDir, fmt.Sprintf("source instance %q", src.Display()), "fork", live)
-	if err != nil {
-		return err
-	}
-	if lock != nil {
-		defer lock.Close()
-		// The held boot lock keeps delete out transitively; a full copy must
-		// not block every lifecycle waiter. The live path has no boot lock,
-		// so there the lifecycle lock stays held through the copy instead.
-		lc.Close()
-	}
+	defer srcLC.Close()
+	defer dstLC.Close()
 
 	dstDir, err := instanceDir(dst.ID)
 	if err != nil {
 		return err
 	}
-	// The atomic Mkdir claims the destination, so of two forks to one name the
-	// loser bails before the cleanup paths below could RemoveAll the winner's
-	// state.
+	// The atomic Mkdir claims the pathname: of two forks to one name, the
+	// loser must not RemoveAll the winner's state.
 	if err := os.MkdirAll(filepath.Dir(dstDir), 0o700); err != nil {
 		return err
 	}
@@ -106,6 +92,40 @@ func cmdFork(selector string, live bool, newName string) error {
 		}
 		return err
 	}
+	// Held across seeding and rollback: an unlocked half-seeded destination
+	// would be claimable by a concurrent start or delete mid-copy.
+	dstLock, err := claimInstanceLocked(dstDir, 0, nil)
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	defer dstLock.Close()
+
+	srcLock, running, err := claimOrLive(src.ID, srcDir, fmt.Sprintf("source instance %q", src.Display()), "fork", live)
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	if srcLock != nil {
+		defer srcLock.Close()
+		// The held boot lock keeps delete out transitively; a full copy must
+		// not block every lifecycle waiter. The live path has no boot lock,
+		// so there the lifecycle lock stays held through the copy instead.
+		srcLC.Close()
+	}
+
+	// The pre-lock record could predate a restore or a rebuild.
+	srcInst, _, err := loadInstance(src.ID)
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	srcImg, err := liveImage(srcDir, src.Display())
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+
 	inst := dst.newInstance()
 	// From the source: the fork is that system with that /var. A later
 	// `sprout up` rebuilds against this worktree's flake.
