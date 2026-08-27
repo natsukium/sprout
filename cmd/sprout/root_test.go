@@ -221,8 +221,8 @@ func TestBackgroundedChildrenRunInTheForeground(t *testing.T) {
 		what string
 		argv []string
 	}{
-		{"up", upChildArgs("", "dev", ".", "")},
-		{"up with a bundle", upChildArgs("feature-x", "", ".", "/nix/store/bundle")},
+		{"up", upChildArgs("aaaa00000001", "", "dev", ".", "")},
+		{"up with a bundle", upChildArgs("aaaa00000001", "feature-x", "", ".", "/nix/store/bundle")},
 		{"start", startChildArgs("aaaa00000001")},
 	}
 	for _, c := range cases {

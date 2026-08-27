@@ -17,7 +17,7 @@ import (
 // it names is present in the runner, so drift in either direction fails here
 // instead of at a user's `sprout up`.
 func TestManifestRunnerContract(t *testing.T) {
-	bundle, err := nixBuild(".", "dev")
+	bundle, err := nixBuild(filepath.Join(t.TempDir(), "bundle"), ".", "dev")
 	if err != nil {
 		t.Fatalf("nix build: %v", err)
 	}

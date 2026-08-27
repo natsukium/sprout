@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -342,6 +343,180 @@ func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	})
 	if !strings.Contains(out, "already running") {
 		t.Errorf("up should have handed off to the concurrent boot, output:\n%s", out)
+	}
+}
+
+func bootManifest() *Manifest {
+	m := &Manifest{Version: manifestSchemaVersion}
+	m.Guest.IP = "127.0.0.1"
+	m.Guest.SSHUser = "sprout"
+	return m
+}
+
+func upIdentity(root, id string) *Identity {
+	return &Identity{ID: id, Name: "feature", KeySource: "directory", Worktree: root, RepoRoot: root}
+}
+
+// The boot phase minus the daemon: the record lands canonicalized, the
+// attempt's token is retired now that the canonical root took over, and the
+// caller gets the boot lock.
+func TestPrepareUpBootCommitsTheRecordAndRetiresTheToken(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00001111"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+
+	tok, err := publishAttempt(id, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tok.Close()
+
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keepToken := false
+	lock, inst, err := prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(), 0, &keepToken)
+	if err != nil {
+		t.Fatalf("prepareUpBoot: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("prepareUpBoot returned no boot lock")
+	}
+	defer lock.Close()
+
+	if inst.Bundle != canonical {
+		t.Errorf("instance bundle = %q, want the canonical %q", inst.Bundle, canonical)
+	}
+	if got := readRecord(t, dir).Bundle; got != canonical {
+		t.Errorf("record on disk = %q, want the canonical %q", got, canonical)
+	}
+	if keepToken {
+		t.Error("a successful boot asked for its token to be kept")
+	}
+	if names := stagingEntries(t, dir); len(names) != 0 {
+		t.Errorf("staging holds %v after a successful boot, want it empty", names)
+	}
+}
+
+// The central regression: an `up` whose instance was deleted (and recreated at
+// the same path) mid-build must abort before it writes anything, or it would
+// claim and overwrite a stranger's incarnation.
+func TestPrepareUpBootAbortsWhenTheInstanceWasRecreated(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00001112"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+
+	tok, err := publishAttempt(id, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tok.Close()
+
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Delete and recreate: the pathname is the one the attempt published under,
+	// the directory behind it is a different incarnation.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	keepToken := false
+	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(), 0, &keepToken)
+	if err == nil {
+		t.Fatal("a stale attempt booted into a recreated instance")
+	}
+	if !strings.Contains(err.Error(), "deleted while building") {
+		t.Fatalf("error = %v, want it to name the deletion", err)
+	}
+	for _, name := range []string{"instance.json", "daemon.lock"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("the stale attempt left %s in the recreated instance: %v", name, err)
+		}
+	}
+}
+
+// The record is committed before the roots are reconciled, so a failed pin
+// leaves a record whose only protection is the attempt's staging root: the
+// token must outlive the failure.
+func TestPrepareUpBootKeepsTheTokenWhenReconcileFails(t *testing.T) {
+	storePath := anyStoreDir(t)
+	root := shortStateRoot(t)
+	const id = "aaaa00001113"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := filepath.Join(root, "sprout", "instances", id)
+
+	tok, err := publishAttempt(id, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tok.Close()
+	// The staging root a store-backed intake parks in the token dir — after
+	// the pin failure it is the committed record's only GC protection.
+	if err := os.Symlink(storePath, stagingBundleLink(tok.dir)); err != nil {
+		t.Fatal(err)
+	}
+
+	pinFailed := errors.New("nix build refused")
+	recordPins(t, func(int) error { return pinFailed })
+
+	keepToken := false
+	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", storePath, bootManifest(), 0, &keepToken)
+	if !errors.Is(err, pinFailed) {
+		t.Fatalf("prepareUpBoot error = %v, want the pin failure", err)
+	}
+	if !keepToken {
+		t.Error("the attempt's token was retired even though the canonical pin failed")
+	}
+	if resolved, err := filepath.EvalSymlinks(stagingBundleLink(tok.dir)); err != nil || resolved != storePath {
+		t.Errorf("staging root = %q (err %v), want it still resolving to %q", resolved, err, storePath)
+	}
+	if got := readRecord(t, dir).Bundle; got != storePath {
+		t.Errorf("record on disk = %q, want the committed %q", got, storePath)
+	}
+}
+
+// Convergence compares builds, not spellings: a legacy record that resolves to
+// the bundle being booted is the same build, and anything unresolvable is not.
+func TestSameBundle(t *testing.T) {
+	dir := t.TempDir()
+	target, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "bundle")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		what      string
+		recorded  string
+		canonical string
+		want      bool
+	}{
+		{what: "identical paths", recorded: target, canonical: target, want: true},
+		{what: "symlink to the canonical path", recorded: link, canonical: target, want: true},
+		{what: "relative record", recorded: "relative/bundle", canonical: target},
+		{what: "missing record", recorded: filepath.Join(dir, "gone"), canonical: target},
+		{what: "different bundle", recorded: dir, canonical: target},
+	}
+	for _, c := range cases {
+		if got := sameBundle(c.recorded, c.canonical); got != c.want {
+			t.Errorf("%s: sameBundle(%q, %q) = %v, want %v", c.what, c.recorded, c.canonical, got, c.want)
+		}
 	}
 }
 
