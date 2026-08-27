@@ -87,7 +87,7 @@ func noteRunningSiblings(id *Identity) {
 }
 
 func upDetached(id *Identity, selector, def, flakeRef, bundle string) error {
-	return launchDetached(id, selector, upChildArgs(selector, def, flakeRef, bundle), "building and booting", "up")
+	return launchDetached(id, selector, upChildArgs(selector, def, flakeRef, bundle), "building and booting", "up", true)
 }
 
 // --foreground is mandatory: without it the child would detach in turn and
@@ -108,20 +108,17 @@ func upChildArgs(selector, def, flakeRef, bundle string) []string {
 
 // The child *is* the daemon, so the reaping awaitBootOrReady does while racing
 // its exit is what keeps a long-lived caller from collecting zombies.
-func bootDetached(id string, childArgs []string, supersededPID int, what string, announce func(logPath string)) error {
+func bootDetached(id string, childArgs []string, supersededPID int, what string, createDir bool, announce func(logPath string)) error {
 	dir, err := instanceDir(id)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	logPath := upLogPath(dir)
-	logf, err := os.Create(logPath)
+	logf, err := scaffoldDetached(id, dir, createDir)
 	if err != nil {
 		return err
 	}
 	defer logf.Close()
+	logPath := upLogPath(dir)
 
 	child, err := backgroundSelf(childArgs, logf)
 	if err != nil {
@@ -136,12 +133,36 @@ func bootDetached(id string, childArgs []string, supersededPID int, what string,
 	return awaitBootOrReady(child.Wait, id, supersededPID, logPath, what)
 }
 
-func launchDetached(id *Identity, selector string, childArgs []string, action, what string) error {
+// Scaffolding under the lifecycle lock keeps the dir and log from landing
+// inside a directory a delete is renaming away. `up` is a create command;
+// `start` is not, so for it a missing directory means no instance.
+func scaffoldDetached(id, dir string, create bool) (*os.File, error) {
+	lc, err := acquireLifecycleLock(id)
+	if err != nil {
+		return nil, err
+	}
+	defer lc.Close()
+	if create {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	logf, err := os.Create(upLogPath(dir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &instanceNotFoundError{selector: id}
+		}
+		return nil, err
+	}
+	return logf, nil
+}
+
+func launchDetached(id *Identity, selector string, childArgs []string, action, what string, createDir bool) error {
 	// Captured before the child replaces it: an in-place `up` reboot keeps the
 	// current VM answering through the rebuild, so readiness must wait for a
 	// *different* daemon, not just any.
 	supersededPID := runningPID(id.ID)
-	err := bootDetached(id.ID, childArgs, supersededPID, what, func(logPath string) {
+	err := bootDetached(id.ID, childArgs, supersededPID, what, createDir, func(logPath string) {
 		fmt.Printf("%s %q in the background (log: %s) …\n", action, id.Display(), logPath)
 	})
 	if err != nil {
@@ -300,12 +321,37 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 		inst := id.newInstance()
 		inst.Definition, inst.Bundle = def, bundle
 		inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
-		err = bootInstance(dir, inst, manifest)
+		lock, err := claimForBoot(id.ID, dir, true)
+		if err == nil {
+			err = bootInstanceLocked(dir, inst, manifest, lock)
+		}
 		if !errors.Is(err, errInstanceNowServing) {
 			return err
 		}
 		fmt.Printf("another sprout process booted %q first, rechecking …\n", id.Display())
 	}
+}
+
+// The serving probe runs during the wait: a winning daemon answers control
+// only once its runner is up, so a booter that lost the race would otherwise
+// wait out the whole timeout and fail against a healthy winner.
+func claimForBoot(id, dir string, create bool) (*os.File, error) {
+	lc, err := acquireLifecycleLock(id)
+	if err != nil {
+		return nil, err
+	}
+	defer lc.Close()
+	if create {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, &instanceNotFoundError{selector: id}
+		}
+		return nil, err
+	}
+	return claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id) })
 }
 
 // The guest's host key lives only in /var (nix/guest/base.nix), so a missing
@@ -334,23 +380,16 @@ func resetStaleHostTrust(dir string) error {
 
 // Shared by `up` and `start`, so a restart takes the same guest-setup path as
 // a first boot and credentials are re-projected rather than frozen at the
-// first `up`.
-func bootInstance(dir string, inst *Instance, manifest *Manifest) error {
+// first `up`. Ownership of the caller's claimed lock fd transfers here; held
+// for the daemon's whole life, it is what licenses reapOrphans to kill VM
+// processes rather than ask about them.
+func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os.File) error {
+	defer lock.Close()
 	inst.WorkspaceMounted = manifest.Workspace
 
 	if err := os.MkdirAll(sshDataDir(dir), 0o700); err != nil {
 		return err
 	}
-
-	// Claim the instance before touching anything under dir. The lock is held
-	// for the daemon's whole life, so holding it proves no other daemon owns
-	// this instance, which is what licenses reapOrphans to kill VM processes
-	// rather than ask about them.
-	lock, err := acquireBootLock(dir, inst.ID, instanceLockWait)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
 	if err := resetStaleHostTrust(dir); err != nil {
 		return err
 	}

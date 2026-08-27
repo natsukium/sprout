@@ -1,12 +1,35 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// `start` boots what is already on record: an id with no state is "no such
+// instance", never an empty directory conjured for it — creating one is `up`'s
+// and `fork`'s privilege alone.
+func TestStartForegroundNeverCreatesTheInstance(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	const id = "startnostate"
+	t.Cleanup(func() { removeSocketDir(id) })
+
+	err := startForeground(&Identity{ID: id, Name: "feature"})
+	if err == nil {
+		t.Fatal("start of an instance with no state succeeded")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("start error = %v, want it to unwrap to os.ErrNotExist", err)
+	}
+	dir := filepath.Join(root, "sprout", "instances", id)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("start created %s (stat err = %v)", dir, err)
+	}
+}
 
 // Once nix GC reclaims the recorded build there is nothing left to boot from,
 // so start sends the user back to `up` rather than into a runner failure.

@@ -77,8 +77,8 @@ func TestAcquireBootLockHandsOffOnceTheWinnerServes(t *testing.T) {
 	defer held.Close()
 	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
 
-	if _, err := acquireBootLock(dir, id, 5*time.Second); !errors.Is(err, errInstanceNowServing) {
-		t.Fatalf("acquireBootLock returned %v, want errInstanceNowServing", err)
+	if _, err := claimInstanceLocked(dir, 5*time.Second, func() bool { return instanceRunning(id) }); !errors.Is(err, errInstanceNowServing) {
+		t.Fatalf("claimInstanceLocked returned %v, want errInstanceNowServing", err)
 	}
 }
 
@@ -95,12 +95,13 @@ func TestAcquireBootLockTimesOutWithoutADaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := acquireBootLock(dir, id, 300*time.Millisecond); err == nil || errors.Is(err, errInstanceNowServing) {
+	serving := func() bool { return instanceRunning(id) }
+	if _, err := claimInstanceLocked(dir, 300*time.Millisecond, serving); err == nil || errors.Is(err, errInstanceNowServing) {
 		t.Fatalf("want the lock-held timeout error, got %v", err)
 	}
 
 	held.Close()
-	lock, err := acquireBootLock(dir, id, time.Second)
+	lock, err := claimInstanceLocked(dir, time.Second, serving)
 	if err != nil {
 		t.Fatalf("acquire after release failed: %v", err)
 	}
