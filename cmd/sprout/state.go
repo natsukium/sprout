@@ -111,12 +111,20 @@ func cacheRoot() (string, error) {
 	return xdgDir("XDG_CACHE_HOME", ".cache")
 }
 
-func instanceDir(id string) (string, error) {
+func instancesRoot() (string, error) {
 	root, err := stateRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "instances", id), nil
+	return filepath.Join(root, "instances"), nil
+}
+
+func instanceDir(id string) (string, error) {
+	root, err := instancesRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, id), nil
 }
 
 func varImagePath(instDir string) string       { return filepath.Join(instDir, "var.img") }
