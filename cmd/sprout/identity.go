@@ -132,6 +132,13 @@ func resolveExistingIdentityAt(flagName, cwd string) (*Identity, error) {
 	if instanceRecordExists(id.ID) {
 		return id, nil
 	}
+	// A directory without a record (a fork or delete that died mid-way) must
+	// stay addressable by exact ID so `sprout delete` can reclaim it and any
+	// leaked GC root; a name selector adopting such a ghost would mislead
+	// every command but delete.
+	if matched, err := matchIDPrefix(flagName); err == nil && matched != "" && matched == id.ID {
+		return id, nil
+	}
 	// An unselected key came from the current branch or directory, a statement
 	// about *here*; widening it host-wide would answer a question nobody asked.
 	if flagName == "" {
