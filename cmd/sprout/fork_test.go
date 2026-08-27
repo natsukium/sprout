@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A fork is a new, independently addressable instance carrying the source's
@@ -157,6 +158,77 @@ func TestForkHasNoForce(t *testing.T) {
 	}
 	if f := newForkCmd().Flags().Lookup("from"); f != nil {
 		t.Error("--from is back; the source is selected with -i like every other existing instance")
+	}
+}
+
+// Fork is the one command holding two instances' lifecycle locks at once, so
+// two forks running in opposite directions must both finish rather than wait on
+// each other forever.
+func TestConcurrentOppositeForksBothFinish(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	t.Chdir(t.TempDir())
+
+	idA, idB := "aaaa1111dddd", "aaaa2222dddd"
+	newTestInstance(t, root, idA, "a", "a's /var")
+	newTestInstance(t, root, idB, "b", "b's /var")
+
+	errs := make(chan error, 2)
+	go func() { errs <- cmdFork(idA, false, "fork-of-a") }()
+	go func() { errs <- cmdFork(idB, false, "fork-of-b") }()
+	for range 2 {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Errorf("concurrent fork of a stopped source: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("concurrent opposite-direction forks deadlocked")
+		}
+	}
+
+	for _, name := range []string{"fork-of-a", "fork-of-b"} {
+		ids, err := instancesNamed(name)
+		if err != nil || len(ids) != 1 {
+			t.Fatalf("instancesNamed(%s) = %v (err %v), want exactly one", name, ids, err)
+		}
+	}
+}
+
+// Seeding is the point of no return for a fork; if the copy fails, the
+// destination must be gone, not left as a half-built instance the next command
+// would have to refuse.
+func TestForkRemovesTheDestinationWhenSeedingFails(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	t.Chdir(t.TempDir())
+
+	srcID := "bbbb4444cccc"
+	srcDir := newTestInstance(t, root, srcID, "source", "seeded /var")
+	srcImg := filepath.Join(srcDir, "var.img")
+	if err := os.Chmod(srcImg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restored so the temporary state root can be removed again.
+	t.Cleanup(func() { os.Chmod(srcImg, 0o644) })
+
+	dst, err := resolveIdentity("forked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dstDir, err := instanceDir(dst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdFork(srcID, false, "forked"); err == nil {
+		t.Fatal("fork succeeded with an unreadable source volume")
+	}
+	if ids, _ := instancesNamed("forked"); len(ids) != 0 {
+		t.Errorf("a failed fork left a findable instance: %v", ids)
+	}
+	if _, err := os.Stat(dstDir); !os.IsNotExist(err) {
+		t.Errorf("destination %s survived a failed fork (stat err = %v)", dstDir, err)
 	}
 }
 
