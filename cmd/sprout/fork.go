@@ -125,11 +125,25 @@ func cmdFork(selector string, live bool, newName string) error {
 		os.RemoveAll(dstDir)
 		return err
 	}
+	// Pinned before seeding: a rollback must never publish a fork whose build
+	// the next GC collects.
+	bundle, err := canonicalBundlePath(srcInst.Bundle, src.Display())
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	if storeRoot, ok := storeRootOf(bundle); ok {
+		// nix may create the link before failing, which the rollback removes.
+		if err := pinBundleRoot(bundleLinkPath(dstDir), storeRoot); err != nil {
+			os.RemoveAll(dstDir)
+			return err
+		}
+	}
 
 	inst := dst.newInstance()
 	// From the source: the fork is that system with that /var. A later
 	// `sprout up` rebuilds against this worktree's flake.
-	inst.Definition, inst.Bundle = srcInst.Definition, srcInst.Bundle
+	inst.Definition, inst.Bundle = srcInst.Definition, bundle
 	inst.GuestIP, inst.SSHUser = srcInst.GuestIP, srcInst.SSHUser
 	cow, err := seedVolumeDir(dstDir, srcImg, running, instanceRecordPath(dstDir), inst)
 	if err != nil {
