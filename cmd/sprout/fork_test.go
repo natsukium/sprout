@@ -8,6 +8,30 @@ import (
 	"time"
 )
 
+// Fork canonicalizes the source's recorded build and refuses one that is
+// gone, so tests forking successfully need a bundle that exists on disk.
+// Returns the canonical path the fork is expected to record.
+func pointBundleAtRealDir(t *testing.T, id string) string {
+	t.Helper()
+	inst, dir, err := loadInstance(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(dir, "recorded-bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inst.Bundle = bundle
+	if err := writeJSON(filepath.Join(dir, "instance.json"), inst); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
 // A fork is a new, independently addressable instance carrying the source's
 // /var and build, bound to the directory the command ran in.
 func TestForkSeedsNewInstance(t *testing.T) {
@@ -20,6 +44,7 @@ func TestForkSeedsNewInstance(t *testing.T) {
 
 	srcID := "bbbb1111cccc"
 	newTestInstance(t, root, srcID, "source", "seeded /var")
+	srcBundle := pointBundleAtRealDir(t, srcID)
 
 	if err := cmdFork(srcID, false, "forked"); err != nil {
 		t.Fatalf("fork: %v", err)
@@ -38,8 +63,8 @@ func TestForkSeedsNewInstance(t *testing.T) {
 	if err != nil || string(got) != "seeded /var" {
 		t.Fatalf("forked /var = %q (err %v), want the source's", got, err)
 	}
-	if inst.Bundle != "/nix/store/deadbeef-sprout-vm-dev" {
-		t.Errorf("bundle = %q, want the source's build", inst.Bundle)
+	if inst.Bundle != srcBundle {
+		t.Errorf("bundle = %q, want the source's build %q", inst.Bundle, srcBundle)
 	}
 	// Belonging to the directory rather than the source is what lets a second
 	// branch pick up an expensive /var.
@@ -64,6 +89,7 @@ func TestForkRefusesExistingDestination(t *testing.T) {
 
 	srcID := "bbbb2222cccc"
 	newTestInstance(t, root, srcID, "source", "seeded /var")
+	pointBundleAtRealDir(t, srcID)
 
 	if err := cmdFork(srcID, false, "forked"); err != nil {
 		t.Fatalf("first fork: %v", err)
@@ -172,6 +198,8 @@ func TestConcurrentOppositeForksBothFinish(t *testing.T) {
 	idA, idB := "aaaa1111dddd", "aaaa2222dddd"
 	newTestInstance(t, root, idA, "a", "a's /var")
 	newTestInstance(t, root, idB, "b", "b's /var")
+	pointBundleAtRealDir(t, idA)
+	pointBundleAtRealDir(t, idB)
 
 	errs := make(chan error, 2)
 	go func() { errs <- cmdFork(idA, false, "fork-of-a") }()
@@ -205,6 +233,7 @@ func TestForkRemovesTheDestinationWhenSeedingFails(t *testing.T) {
 
 	srcID := "bbbb4444cccc"
 	srcDir := newTestInstance(t, root, srcID, "source", "seeded /var")
+	pointBundleAtRealDir(t, srcID)
 	srcImg := filepath.Join(srcDir, "var.img")
 	if err := os.Chmod(srcImg, 0o000); err != nil {
 		t.Fatal(err)

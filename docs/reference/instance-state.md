@@ -5,25 +5,29 @@
 ```
 ~/.local/state/sprout/
 ├── id_ed25519                    # shared client key for every instance
-└── instances/<id>/
-    ├── instance.json             # version, repository, branch, definition, bundle path
-    ├── var.img                   # persistent /var (sparse)
-    ├── var.img.restoring         # transient staging file during `snapshot restore`
-    ├── run.sh                    # per-instance runner (placeholders substituted)
-    ├── control.sock              # daemon control socket (present while running)
-    ├── net.sock                  # vfkit datagram socket into the network stack
-    ├── vfkit-rest.sock           # vfkit REST endpoint, used by graceful stop
-    ├── daemon.lock               # held by the running daemon (see below)
-    ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
-    ├── runner.log                # vfkit runner output (`sprout logs`)
-    ├── console.log               # guest serial console (`sprout logs`)
-    ├── data/ssh/                 # authorized_keys, projected at boot
-    ├── data/instance.env         # identity env file; guest path /run/sprout/instance.env (see below)
-    ├── data/credentials/<name>   # materialized secrets; removed on daemon exit (after a SIGKILL or host crash, swept by the next `stop` or boot)
-    ├── known_hosts               # per-instance host key trust
-    └── snapshots/<name>/
-        ├── var.img               # copy-on-write clone of /var
-        └── snapshot.json         # when it was taken, and against which build
+└── instances/
+    ├── .lifecycle-<id>               # lock file serializing create/claim/delete of the instance path
+    └── <id>/
+        ├── instance.json             # version, repository, branch, definition, bundle path
+        ├── bundle                    # symlink to the recorded build; its Nix GC root (see below)
+        ├── staging/<token>/          # transient per-`up` attempt: a lock file plus the build's staging GC root
+        ├── var.img                   # persistent /var (sparse)
+        ├── var.img.restoring         # transient staging file during `snapshot restore`
+        ├── run.sh                    # per-instance runner (placeholders substituted)
+        ├── control.sock              # daemon control socket (present while running)
+        ├── net.sock                  # vfkit datagram socket into the network stack
+        ├── vfkit-rest.sock           # vfkit REST endpoint, used by graceful stop
+        ├── daemon.lock               # held by the running daemon (see below)
+        ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
+        ├── runner.log                # vfkit runner output (`sprout logs`)
+        ├── console.log               # guest serial console (`sprout logs`)
+        ├── data/ssh/                 # authorized_keys, projected at boot
+        ├── data/instance.env         # identity env file; guest path /run/sprout/instance.env (see below)
+        ├── data/credentials/<name>   # materialized secrets; removed on daemon exit (after a SIGKILL or host crash, swept by the next `stop` or boot)
+        ├── known_hosts               # per-instance host key trust
+        └── snapshots/<name>/
+            ├── var.img               # copy-on-write clone of /var
+            └── snapshot.json         # when it was taken, and against which build
 ```
 
 A daemon holds `daemon.lock` for its lifetime. The kernel releases the lock on
@@ -108,6 +112,17 @@ next booted, even after a sibling answering to the same label appears.
 
 The flake output is immutable and content-addressed. The instance directory is
 disposable; `sprout delete` removes it.
+
+Every store-backed build an instance records is protected from `nix store gc`
+by a GC root: the `bundle` symlink above, registered by the same `nix build`
+that produces or adopts the build, with a transient root under `staging/`
+covering the window between a build and its promotion. `sprout delete` drops
+the root with the instance, and the next GC collects the build if nothing else
+references it. Records written by sprout versions before the root existed gain
+theirs at their first boot under this version — a GC run before that first
+boot can still collect their build, exactly as it could before the upgrade;
+`sprout up` rebuilds. A `--bundle` directory outside the store never gets a
+root: its lifetime belongs to whoever created it.
 
 `sprout up` after a definition change rebuilds and reboots into the new system
 by comparing the freshly built store path against the one recorded in

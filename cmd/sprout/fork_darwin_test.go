@@ -16,6 +16,7 @@ func TestForkLiveSucceedsOnCoW(t *testing.T) {
 	srcID := "cccc2222dddd"
 	t.Cleanup(func() { removeSocketDir(srcID) })
 	srcDir := newTestInstance(t, root, srcID, "source", "running /var")
+	pointBundleAtRealDir(t, srcID)
 
 	// Stand in for the daemon: the lock is held for its whole life, and the
 	// control socket answering is what licenses the live copy.

@@ -445,6 +445,39 @@ func TestPruneKeepsAnInstanceThatIsNoLongerOrphaned(t *testing.T) {
 	}
 }
 
+// A fork or delete that died between steps leaves a directory without a
+// record. Addressed by ID it must still resolve and be deletable — when the
+// crash landed between a fork's GC-root pin and its record write, delete is
+// the only way to reclaim the leaked root.
+func TestDeleteReclaimsARecordlessGhostByID(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	const id = "abcd00000099"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir, err := instanceDir(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveExistingIdentity(id)
+	if err != nil {
+		t.Fatalf("a ghost addressed by ID did not resolve: %v", err)
+	}
+	if got.ID != id {
+		t.Fatalf("resolved %q, want %q", got.ID, id)
+	}
+
+	if err := deleteInstances([]string{got.ID}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("ghost directory survived delete")
+	}
+}
+
 // An interrupted delete must never leave a readable instance: what survives is
 // either the whole instance or a husk nothing looks at.
 func TestRemoveInstanceDirLeavesNothingBehind(t *testing.T) {

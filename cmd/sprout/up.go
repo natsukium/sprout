@@ -25,10 +25,11 @@ import (
 
 func newUpCmd() *cobra.Command {
 	var (
-		def        string
-		flakeRef   string
-		bundle     string
-		foreground bool
+		def            string
+		flakeRef       string
+		bundle         string
+		foreground     bool
+		expectInstance string
 	)
 	cmd := &cobra.Command{
 		Use:     "up",
@@ -52,13 +53,15 @@ lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
 	// Hidden, not removed: the nix-darwin module passes a store path here.
 	_ = cmd.Flags().MarkHidden("bundle")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run the daemon in this process instead of returning once the VM is ready (for a supervisor)")
+	cmd.Flags().StringVar(&expectInstance, "expect-instance", "", "abort unless the selector resolves to this instance ID (internal, set by the detached parent)")
+	_ = cmd.Flags().MarkHidden("expect-instance")
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
-		return cmdUp(*selector, def, flakeRef, bundle, foreground)
+		return cmdUp(*selector, def, flakeRef, bundle, foreground, expectInstance)
 	}
 	return cmd
 }
 
-func cmdUp(selector, def, flakeRef, bundle string, foreground bool) error {
+func cmdUp(selector, def, flakeRef, bundle string, foreground bool, expect string) error {
 	definition := def
 	if bundle == "" {
 		var err error
@@ -71,6 +74,14 @@ func cmdUp(selector, def, flakeRef, bundle string, foreground bool) error {
 	id, err := resolveIdentity(selector)
 	if err != nil {
 		return err
+	}
+	// The detached parent resolved the selector once; if its instance was
+	// deleted since, this child's re-resolution would mint a different
+	// instance than the one the parent waits on — the pinned ID turns that
+	// into an abort. An empty KeySource is a recordless re-scaffolded
+	// directory: booting it would publish a broken record.
+	if expect != "" && (id.ID != expect || id.KeySource == "") {
+		return fmt.Errorf("instance %s was deleted while `up` was starting; re-run `sprout up`", expect)
 	}
 	noteRunningSiblings(id)
 	if !foreground {
@@ -87,13 +98,13 @@ func noteRunningSiblings(id *Identity) {
 }
 
 func upDetached(id *Identity, selector, def, flakeRef, bundle string) error {
-	return launchDetached(id, selector, upChildArgs(selector, def, flakeRef, bundle), "building and booting", "up", true)
+	return launchDetached(id, selector, upChildArgs(id.ID, selector, def, flakeRef, bundle), "building and booting", "up", true)
 }
 
 // --foreground is mandatory: without it the child would detach in turn and
 // fork forever.
-func upChildArgs(selector, def, flakeRef, bundle string) []string {
-	args := []string{"up", "--foreground", "--flake", flakeRef}
+func upChildArgs(id, selector, def, flakeRef, bundle string) []string {
+	args := []string{"up", "--foreground", "--flake", flakeRef, "--expect-instance", id}
 	if def != "" {
 		args = append(args, "--vm", def)
 	}
@@ -272,11 +283,30 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 	if err != nil {
 		return err
 	}
+	tok, err := publishAttempt(id.ID, dir)
+	if err != nil {
+		return err
+	}
+	// A committed record whose canonical pin failed may have the staging root
+	// as its only GC protection; every other exit retires the token.
+	keepToken := false
+	defer func() {
+		if keepToken {
+			tok.Close()
+		} else {
+			tok.remove()
+		}
+	}()
 
 	bundle := bundlePath
 	if bundle == "" {
 		fmt.Printf("building %s#sproutConfigurations.%s …\n", flakeRef, def)
-		bundle, err = nixBuild(flakeRef, def)
+		bundle, err = nixBuild(stagingBundleLink(tok.dir), flakeRef, def)
+		if err != nil {
+			return err
+		}
+	} else {
+		bundle, err = intakeBundleArg(bundlePath, tok)
 		if err != nil {
 			return err
 		}
@@ -295,63 +325,133 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 	// different bundles can keep stopping each other's boot, and a bound turns
 	// that ping-pong into an error instead of an endless reboot cycle.
 	for attempt := 0; ; attempt++ {
-		if instanceRunning(id.ID) {
-			prev, _, loadErr := loadInstance(id.ID)
-			if loadErr == nil && prev.Bundle == bundle {
-				fmt.Printf("instance %q is already running\n", id.Display())
-				return nil
-			}
-			if attempt >= 3 {
-				if loadErr != nil {
-					return fmt.Errorf("instance %q is running but its record cannot be read: %w", id.Display(), loadErr)
-				}
-				return fmt.Errorf("another sprout process keeps booting %q with a different definition; retry once the concurrent `up`s agree", id.Display())
-			}
-			fmt.Printf("instance %q definition changed, rebooting …\n", id.Display())
-			// A concurrent `up` rebooting the same changed definition may stop
-			// the daemon first, and losing that race is convergence, not a
-			// failure.
-			if err := stopOne(id.ID, stopBehavior{reportStopped: true, quietIfNotRunning: true}); err != nil {
-				return fmt.Errorf("stopping %q for reboot: %w", id.Display(), err)
-			}
-		} else if attempt >= 3 {
-			return fmt.Errorf("booting %q keeps losing to other sprout processes; retry once the concurrent boots settle", id.Display())
+		lock, inst, err := prepareUpBoot(id, dir, tok, def, bundle, manifest, attempt, &keepToken)
+		if errors.Is(err, errUpConverged) {
+			return nil
 		}
-
-		inst := id.newInstance()
-		inst.Definition, inst.Bundle = def, bundle
-		inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
-		lock, err := claimForBoot(id.ID, dir, true)
-		if err == nil {
-			err = bootInstanceLocked(dir, inst, manifest, lock)
+		if errors.Is(err, errInstanceNowServing) {
+			fmt.Printf("another sprout process booted %q first, rechecking …\n", id.Display())
+			continue
 		}
-		if !errors.Is(err, errInstanceNowServing) {
+		if err != nil {
 			return err
 		}
-		fmt.Printf("another sprout process booted %q first, rechecking …\n", id.Display())
+		return bootInstanceLocked(dir, inst, manifest, lock)
 	}
 }
 
-// The serving probe runs during the wait: a winning daemon answers control
-// only once its runner is up, so a booter that lost the race would otherwise
-// wait out the whole timeout and fail against a healthy winner.
-func claimForBoot(id, dir string, create bool) (*os.File, error) {
+var errUpConverged = errors.New("instance already runs this bundle")
+
+// The token is verified before the stop and around the claim: a stale `up`
+// whose instance was deleted mid-build must neither stop the replacement's
+// daemon nor drop a daemon.lock into its directory. The record is committed
+// before reconcileRoots, so a crash between the two leaves the staging root
+// protecting it until the next boot re-pins.
+func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle string, manifest *Manifest, attempt int, keepToken *bool) (*os.File, *Instance, error) {
+	lc, err := acquireLifecycleLock(id.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lc.Close()
+	if err := tok.verify(); err != nil {
+		return nil, nil, err
+	}
+	if instanceRunning(id.ID) {
+		prev, _, loadErr := loadInstance(id.ID)
+		if loadErr == nil && sameBundle(prev.Bundle, bundle) {
+			fmt.Printf("instance %q is already running\n", id.Display())
+			return nil, nil, errUpConverged
+		}
+		if attempt >= 3 {
+			if loadErr != nil {
+				return nil, nil, fmt.Errorf("instance %q is running but its record cannot be read: %w", id.Display(), loadErr)
+			}
+			return nil, nil, fmt.Errorf("another sprout process keeps booting %q with a different definition; retry once the concurrent `up`s agree", id.Display())
+		}
+		fmt.Printf("instance %q definition changed, rebooting …\n", id.Display())
+		if err := stopLocked(id.ID, id.Display()); err != nil {
+			return nil, nil, fmt.Errorf("stopping %q for reboot: %w", id.Display(), err)
+		}
+		fmt.Printf("instance %q stopped\n", id.Display())
+	} else if attempt >= 3 {
+		return nil, nil, fmt.Errorf("booting %q keeps losing to other sprout processes; retry once the concurrent boots settle", id.Display())
+	}
+
+	lock, err := claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id.ID) })
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tok.verify(); err != nil {
+		lock.Close()
+		return nil, nil, err
+	}
+	// Swept here rather than left to the boot's cleanup, so a failed attempt
+	// does not exit with a SIGKILLed daemon's secrets still on disk.
+	if err := os.RemoveAll(credentialsDir(dir)); err != nil {
+		lock.Close()
+		return nil, nil, err
+	}
+	inst := id.newInstance()
+	inst.Definition, inst.Bundle = def, bundle
+	inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
+	if err := writeJSON(instanceRecordPath(dir), inst); err != nil {
+		lock.Close()
+		return nil, nil, err
+	}
+	if err := reconcileRoots(dir, inst); err != nil {
+		*keepToken = true
+		lock.Close()
+		return nil, nil, err
+	}
+	tok.remove()
+	return lock, inst, nil
+}
+
+// Convergence compares builds, not spellings: a legacy record is resolved,
+// and an unresolvable one counts as different — the reboot then migrates it.
+func sameBundle(recorded, canonical string) bool {
+	if recorded == canonical {
+		return true
+	}
+	if !filepath.IsAbs(recorded) {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(recorded)
+	return err == nil && resolved == canonical
+}
+
+// Creation happens under the lifecycle lock so a delete completing first
+// serializes into a clean fresh creation instead of racing the removal.
+func publishAttempt(id, dir string) (*attemptToken, error) {
 	lc, err := acquireLifecycleLock(id)
 	if err != nil {
 		return nil, err
 	}
 	defer lc.Close()
-	if create {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-	} else if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			return nil, &instanceNotFoundError{selector: id}
-		}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id) })
+	return publishToken(dir)
+}
+
+// Canonicalized at intake so records never carry relative or symlinked paths;
+// a store-backed argument gets a staging root before any GC could collect it,
+// a non-store directory stays intentionally rootless.
+func intakeBundleArg(arg string, tok *attemptToken) (string, error) {
+	abs, err := filepath.Abs(arg)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	if storeRoot, ok := storeRootOf(canonical); ok {
+		if err := pinBundleRoot(stagingBundleLink(tok.dir), storeRoot); err != nil {
+			return "", err
+		}
+	}
+	return canonical, nil
 }
 
 // The guest's host key lives only in /var (nix/guest/base.nix), so a missing
@@ -497,19 +597,22 @@ func resolveInstanceSockets(sockDir string, m *Manifest) (instanceSockets, error
 	return s, nil
 }
 
-func nixBuild(flakeRef, def string) (string, error) {
+// The out-link is the build's GC root, registered inside the same nix
+// invocation so there is no build-to-root window. Exactly one output path:
+// with several, the root would silently not cover what gets booted.
+func nixBuild(outLink, flakeRef, def string) (string, error) {
 	attr := fmt.Sprintf("%s#sproutConfigurations.%s", flakeRef, def)
-	cmd := exec.Command("nix", "build", "--no-link", "--print-out-paths", attr)
+	cmd := exec.Command("nix", "build", "--out-link", outLink, "--print-out-paths", attr)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("nix build %s: %w", attr, err)
 	}
 	lines := strings.Fields(strings.TrimSpace(string(out)))
-	if len(lines) == 0 {
-		return "", fmt.Errorf("nix build %s produced no output path", attr)
+	if len(lines) != 1 {
+		return "", fmt.Errorf("nix build %s printed %d output paths; a sprout configuration must produce exactly one bundle", attr, len(lines))
 	}
-	return lines[len(lines)-1], nil
+	return lines[0], nil
 }
 
 func loadManifest(path string) (*Manifest, error) {

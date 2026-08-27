@@ -64,7 +64,7 @@ func cmdRun(def, flakeRef string, command []string) error {
 	// The daemon gets its own process group, so a Ctrl-C reaches the command
 	// rather than the daemon, which has to outlive the interrupt long enough
 	// to stop the VM cleanly.
-	up, err := backgroundSelf(upChildArgs(name, definition, flakeRef, ""), os.Stderr)
+	up, err := backgroundSelf(upChildArgs(id.ID, name, definition, flakeRef, ""), os.Stderr)
 	if err != nil {
 		return err
 	}
