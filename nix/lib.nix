@@ -38,12 +38,13 @@ let
   # Match the flake-parts output shape so discovery has one contract.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
-  # What the sprout binary shells out to: identity resolution runs git, and
-  # reaching a guest runs ssh. The vfkit runner carries its own closure and
-  # needs nothing here.
+  # What the sprout binary shells out to (git, ssh, and `nix build` for GC
+  # roots): launchd jobs see only this PATH. The vfkit runner carries its own
+  # closure and needs nothing here.
   hostTools = pkgs: [
     pkgs.git
     pkgs.openssh
+    pkgs.nix
   ];
 in
 {
