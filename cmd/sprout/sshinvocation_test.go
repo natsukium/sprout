@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -101,5 +102,31 @@ func TestSSHInvocationInteractiveGetsNoRemoteCommand(t *testing.T) {
 	}
 	if last := args[len(args)-1]; last != "root@sprout-main" {
 		t.Errorf("interactive argv must end at the destination, got %q", last)
+	}
+}
+
+// ssh's default RequestTTY=auto never allocates a pty when a remote command is
+// given, so `exec --tty` has to force one; without --tty, ssh must not get one.
+func TestSSHInvocationTTYFlag(t *testing.T) {
+	writeSSHTestInstance(t, &Instance{
+		ID:      "abc123def456",
+		Name:    "main",
+		SSHUser: "root",
+	})
+
+	for _, tc := range []struct {
+		tty       bool
+		want, not string
+	}{
+		{tty: true, want: "-tt", not: "-T"},
+		{tty: false, want: "-T", not: "-tt"},
+	} {
+		_, args, err := sshInvocation("abc123def456", tc.tty, []string{"htop"})
+		if err != nil {
+			t.Fatalf("sshInvocation: %v", err)
+		}
+		if !slices.Contains(args, tc.want) || slices.Contains(args, tc.not) {
+			t.Errorf("tty=%v: argv %q must contain %q and not %q", tc.tty, args, tc.want, tc.not)
+		}
 	}
 }

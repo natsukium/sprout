@@ -191,7 +191,11 @@ func sshInvocation(id string, tty bool, command []string) (string, []string, err
 	for _, o := range target.options {
 		sshArgs = append(sshArgs, "-o", o[0]+"="+o[1])
 	}
-	if !tty {
+	// A single -t requests a pty only when local stdin is a terminal, so an
+	// explicit --tty would silently run without one from a pipe or script.
+	if tty {
+		sshArgs = append(sshArgs, "-tt")
+	} else {
 		sshArgs = append(sshArgs, "-T")
 	}
 	sshArgs = append(sshArgs, fmt.Sprintf("%s@sprout-%s", target.user, target.label))
