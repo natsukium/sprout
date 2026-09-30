@@ -5,8 +5,19 @@
     inputs.git-hooks.flakeModule
   ];
 
+  # Only this partition's outputs gain Linux; packages.sprout stays darwin-only.
+  systems = [
+    "aarch64-linux"
+    "x86_64-linux"
+  ];
+
   perSystem =
-    { config, pkgs, ... }:
+    {
+      config,
+      lib,
+      pkgs,
+      ...
+    }:
     {
       treefmt = {
         projectRootFile = "flake.nix";
@@ -31,6 +42,11 @@
           pkgs.go
           pkgs.gopls
           pkgs.prek
+        ]
+        # fish: a guest root login shell that does not quote like sh.
+        ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+          pkgs.git
+          pkgs.fish
         ];
         shellHook = config.pre-commit.installationScript;
       };

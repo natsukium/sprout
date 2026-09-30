@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -200,26 +202,35 @@ func sshInvocation(id string, tty bool, command []string) (string, []string, err
 	}
 	sshArgs = append(sshArgs, fmt.Sprintf("%s@sprout-%s", target.user, target.label))
 	if len(command) > 0 {
-		sshArgs = append(sshArgs, remoteCommand(command, target.workspaceMounted))
+		sshArgs = append(sshArgs, remoteCommand(command, target.workspaceMounted, !tty))
 	}
 	return sshPath, sshArgs, nil
 }
 
-// One quoted string, because OpenSSH otherwise joins its argv with spaces
-// before the remote shell sees it, losing the boundaries in `sh -c '…'`,
-// empty arguments, and arguments containing spaces.
-func remoteCommand(command []string, workspaceMounted bool) string {
-	words := make([]string, len(command))
-	for i, arg := range command {
-		words[i] = shellQuote(arg)
-	}
-	prefix := ""
+//go:embed execguard.sh
+var execGuard string
+
+// The login shell may be fish, so the string it parses carries nothing a shell
+// could reinterpret. Every hop execs, so the guard's parent is sshd-session.
+func remoteCommand(command []string, workspaceMounted, guarded bool) string {
+	var script strings.Builder
 	if workspaceMounted {
 		// Interactive shells get this from the guest's login init, which a
 		// non-interactive command never reads.
-		prefix = "cd /workspace 2>/dev/null; "
+		script.WriteString("cd /workspace 2>/dev/null\n")
 	}
-	return prefix + strings.Join(words, " ")
+	script.WriteString("set --")
+	for _, arg := range command {
+		script.WriteString(" " + shellQuote(arg))
+	}
+	script.WriteString("\n" + execGuard)
+
+	run := `exec /bin/sh -c "$s"`
+	if guarded {
+		run = `if command -v setpriv >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1 && command -v find >/dev/null 2>&1; then export SPROUT_SSHD=$PPID; exec setpriv --pdeathsig TERM -- /bin/sh -c "$s"; else ` + run + `; fi`
+	}
+	payload := base64.StdEncoding.EncodeToString([]byte(script.String()))
+	return `exec /bin/sh -c 's=$(printf %s ` + payload + ` | base64 -d); ` + run + `'`
 }
 
 func newSSHCmd() *cobra.Command {

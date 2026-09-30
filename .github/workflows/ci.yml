@@ -40,6 +40,16 @@ jobs:
       # else here catches a vendorHash left stale by a go.mod change.
       - run: nix build .#sprout --print-build-logs
 
+  linux:
+    name: go (linux)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+      - run: nix develop -c go vet ./...
+      - run: nix develop -c go test -race ./...
+
   guests:
     name: guest closure (${{ matrix.example }}/${{ matrix.vm }})
     runs-on: ubuntu-24.04-arm
