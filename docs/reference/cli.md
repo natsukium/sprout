@@ -262,6 +262,13 @@ boundaries after it are preserved, including the single compound argument to
 `sh -c` above. Shell operators are syntax only when passed explicitly through
 a shell this way.
 
+Without a TTY, a guest command ends with its session: when `sprout exec` exits
+for any reason (Ctrl-C, a killed caller, a dropped connection), the command's
+process group gets SIGTERM, and SIGKILL 5 seconds later if anything is left.
+That is SIGTERM rather than SIGINT, so a handler for Ctrl-C alone does not run.
+With `-t`, the TTY's hangup (SIGHUP) stops it instead. A command that must
+outlive the session has to leave it, for example through `systemd-run`.
+
 Neither starts a stopped instance:
 
 ```console
