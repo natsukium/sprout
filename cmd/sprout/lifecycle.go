@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,7 +15,7 @@ import (
 )
 
 func newStopCmd() *cobra.Command {
-	var all, project bool
+	var all, project, hard bool
 	cmd := &cobra.Command{
 		Use:     "stop",
 		Short:   "Graceful shutdown, keep state",
@@ -23,6 +25,7 @@ func newStopCmd() *cobra.Command {
 	selector := addInstanceFlag(cmd)
 	cmd.Flags().BoolVar(&all, "all", false, "stop every instance on this host")
 	cmd.Flags().BoolVar(&project, "project", false, "stop every instance of the current repository")
+	cmd.Flags().BoolVar(&hard, "hard", false, hardFlagUsage)
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
 		if all || project {
 			if all && project {
@@ -40,14 +43,14 @@ func newStopCmd() *cobra.Command {
 				return nil
 			}
 			return forEachOf(ids, func(id string) error {
-				return stopOne(id, stopBehavior{quietIfNotRunning: true, reportStopped: true})
+				return stopOne(id, stopBehavior{quietIfNotRunning: true, reportStopped: true, hard: hard})
 			})
 		}
 		id, err := resolveExistingIdentity(*selector)
 		if err != nil {
 			return err
 		}
-		return stopOne(id.ID, stopBehavior{reportStopped: true, addressed: id})
+		return stopOne(id.ID, stopBehavior{reportStopped: true, addressed: id, hard: hard})
 	}
 	return cmd
 }
@@ -63,6 +66,7 @@ type stopBehavior struct {
 	quietIfNotRunning bool
 	reportStopped     bool
 	addressed         *Identity
+	hard              bool
 }
 
 func stopOne(id string, behavior stopBehavior) error {
@@ -72,6 +76,14 @@ func stopOne(id string, behavior stopBehavior) error {
 	dir, err := instanceDir(id)
 	if err != nil {
 		return err
+	}
+	// Opened before the lock wait, so a delete and re-create meanwhile is
+	// caught before it can take the power cut meant for this incarnation.
+	var marker *incarnationMarker
+	if behavior.hard {
+		if marker, err = openIncarnationMarker(dir); err == nil {
+			defer marker.Close()
+		}
 	}
 	lc, err := acquireLifecycleLock(id)
 	if err != nil {
@@ -94,7 +106,14 @@ func stopOne(id string, behavior stopBehavior) error {
 		}
 		return errors.New(msg)
 	}
-	if err := stopLocked(id, name); err != nil {
+	stop := stopLocked
+	if behavior.hard {
+		if marker == nil || marker.verify(dir) != nil {
+			return fmt.Errorf("instance %q changed since it was selected; re-run the command", name)
+		}
+		stop = hardStopLocked
+	}
+	if err := stop(id, name); err != nil {
 		return err
 	}
 	sweepStaleCredentialsLocked(dir, 2*time.Second)
@@ -112,8 +131,66 @@ func stopLocked(id, name string) error {
 	if _, err := controlRequest(id, "STOP"); err != nil && instanceRunning(id) {
 		return fmt.Errorf("instance %q: stop failed: %w", name, err)
 	}
-	// Polled until the control socket goes quiet, so `stop && rm`
-	// compositions are safe.
+	return waitStopped(id, name)
+}
+
+const hardFlagUsage = "power the VM off without a guest shutdown, after a best-effort guest sync"
+
+// The caller holds the lifecycle lock, as for stopLocked.
+func hardStopLocked(id, name string) error {
+	info, err := queryInfoBrief(id)
+	if err != nil {
+		if !instanceRunning(id) {
+			return nil
+		}
+		return fmt.Errorf("instance %q: hard stop failed: %w", name, err)
+	}
+	if !info.HardStop {
+		return fmt.Errorf("instance %q runs a sprout daemon that predates --hard; stop it without --hard", name)
+	}
+	// Writes still in the guest's page cache reach the host's virtiofs
+	// shares only through a sync; a guest that cannot answer loses them.
+	if err := guestSync(id); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: instance %q: guest sync failed, powering off anyway: %v\n", name, err)
+	}
+	reply, err := controlRequest(id, "STOP hard")
+	if err != nil {
+		if !instanceRunning(id) {
+			return nil
+		}
+		return fmt.Errorf("instance %q: hard stop failed: %w", name, err)
+	}
+	if reply != "OK hard" {
+		return fmt.Errorf("instance %q: daemon answered %q to a hard stop", name, reply)
+	}
+	return waitStopped(id, name)
+}
+
+var guestSyncTimeout = 10 * time.Second
+
+var guestSync = func(id string) error {
+	sshPath, sshArgs, err := sshInvocation(id, false, []string{"sync"})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), guestSyncTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sshPath, sshArgs[1:]...)
+	// The ProxyCommand child can outlive a killed ssh and hold the output
+	// pipe open, which would make the timeout wait for it.
+	cmd.WaitDelay = time.Second
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// Polled until the control socket goes quiet, so `stop && rm` compositions
+// are safe.
+func waitStopped(id, name string) error {
 	stopped := pollUntil(60*time.Second, 500*time.Millisecond, func() bool {
 		return !instanceRunning(id)
 	})
@@ -128,6 +205,7 @@ func newDeleteCmd() *cobra.Command {
 		force   bool
 		all     bool
 		project bool
+		hard    bool
 	)
 	cmd := &cobra.Command{
 		Use:     "delete",
@@ -139,6 +217,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "skip confirmation")
 	cmd.Flags().BoolVar(&all, "all", false, "delete every instance on this host")
 	cmd.Flags().BoolVar(&project, "project", false, "delete every instance of the current repository")
+	cmd.Flags().BoolVar(&hard, "hard", false, hardFlagUsage)
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
 		if all || project {
 			if all && project {
@@ -151,13 +230,13 @@ func newDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return deleteInstances(ids, force)
+			return deleteInstances(ids, force, hard)
 		}
 		id, err := resolveExistingIdentity(*selector)
 		if err != nil {
 			return err
 		}
-		return deleteInstances([]string{id.ID}, force)
+		return deleteInstances([]string{id.ID}, force, hard)
 	}
 	return cmd
 }
@@ -169,6 +248,7 @@ type deleteTarget struct {
 	dir       string
 	snapshots int
 	marker    *incarnationMarker
+	hard      bool
 }
 
 func newDeleteTarget(id string) (deleteTarget, error) {
@@ -207,7 +287,7 @@ func listTargets(targets []deleteTarget) {
 	}
 }
 
-func deleteInstances(ids []string, force bool) error {
+func deleteInstances(ids []string, force, hard bool) error {
 	targets := make([]deleteTarget, 0, len(ids))
 	defer func() {
 		for _, t := range targets {
@@ -219,6 +299,7 @@ func deleteInstances(ids []string, force bool) error {
 		if err != nil {
 			return err
 		}
+		t.hard = hard
 		targets = append(targets, t)
 	}
 	if len(targets) == 0 {
@@ -284,7 +365,11 @@ func deleteOne(t deleteTarget) error {
 		return fmt.Errorf("instance %q: %w", name, err)
 	}
 	if instanceRunning(t.id) {
-		if err := stopLocked(t.id, name); err != nil {
+		stop := stopLocked
+		if t.hard {
+			stop = hardStopLocked
+		}
+		if err := stop(t.id, name); err != nil {
 			return err
 		}
 	}

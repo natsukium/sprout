@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -752,17 +753,21 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	}
 	fmt.Printf("instance %q booting (runner pid %d) …\n", inst.Name, cmd.Process.Pid)
 
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
+	exit := watchRunner(cmd)
 
 	var stopRequested atomic.Bool
-	stop := func() { stopRequested.Store(true); go gracefulStop(socks.rest, cmd, waitCh) }
-	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, sessions: newSessionTracker(time.Now()), runnerPID: cmd.Process.Pid}
+	stop := func() { stopRequested.Store(true); go gracefulStop(socks.rest, cmd, exit) }
+	var hardOnce sync.Once
+	hard := func() {
+		stopRequested.Store(true)
+		hardOnce.Do(func() { go hardStop(socks.rest, cmd, exit) })
+	}
+	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), runnerPID: cmd.Process.Pid}
 	if err := serveControl(ctx, socks.control, srv); err != nil {
 		// The runner is already up; returning without stopping it would strand
 		// a vfkit holding var.img with no control socket, invisible to every
 		// probe until the next boot's orphan reaper finds it.
-		gracefulStop(socks.rest, cmd, waitCh)
+		gracefulStop(socks.rest, cmd, exit)
 		return err
 	}
 
@@ -780,9 +785,10 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	case sig := <-sigCh:
 		fmt.Printf("\nreceived %s, shutting down …\n", sig)
 		srv.stopOnce.Do(stop)
-		err = <-waitCh
-	case err = <-waitCh:
+		<-exit.done
+	case <-exit.done:
 	}
+	err = exit.err
 
 	// Normal shutdowns (vfkit REST stop, guest poweroff) also exit non-zero,
 	// so only unexpected failures are reported.
@@ -866,31 +872,59 @@ var (
 
 // restSock must be sun_path-safe (see socketdir.go): vfkit bound the same file
 // relative to the instance directory.
-func gracefulStop(restSock string, cmd *exec.Cmd, waitCh chan error) {
-	if err := vfkitRestStop(restSock); err == nil {
-		if waitExit(waitCh, restStopWait) {
-			return
-		}
+func gracefulStop(restSock string, cmd *exec.Cmd, exit *runnerExit) {
+	if err := vfkitRestState(restSock, "Stop"); err == nil && exit.within(restStopWait) {
+		return
 	}
+	killRunner(cmd, exit)
+}
+
+// The guest gets no shutdown, but the power cut goes through
+// Virtualization.framework, so vfkit still exits on its own.
+var hardStopWait = 5 * time.Second
+
+func hardStop(restSock string, cmd *exec.Cmd, exit *runnerExit) {
+	if err := vfkitRestState(restSock, "HardStop"); err == nil && exit.within(hardStopWait) {
+		return
+	}
+	killRunner(cmd, exit)
+}
+
+func killRunner(cmd *exec.Cmd, exit *runnerExit) {
 	_ = cmd.Process.Signal(syscall.SIGTERM)
-	if waitExit(waitCh, sigtermWait) {
+	if exit.within(sigtermWait) {
 		return
 	}
 	_ = cmd.Process.Kill()
 }
 
-// Re-queues the exit status, so the main select still observes it.
-func waitExit(waitCh chan error, d time.Duration) bool {
+// A single reaper that every stop path observes: with a channel of the exit
+// status instead, whichever path received first would hide the exit from the
+// others.
+type runnerExit struct {
+	done chan struct{}
+	err  error
+}
+
+func watchRunner(cmd *exec.Cmd) *runnerExit {
+	exit := &runnerExit{done: make(chan struct{})}
+	go func() {
+		exit.err = cmd.Wait()
+		close(exit.done)
+	}()
+	return exit
+}
+
+func (e *runnerExit) within(d time.Duration) bool {
 	select {
-	case err := <-waitCh:
-		waitCh <- err
+	case <-e.done:
 		return true
 	case <-time.After(d):
 		return false
 	}
 }
 
-func vfkitRestStop(sock string) error {
+func vfkitRestState(sock, state string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -901,13 +935,13 @@ func vfkitRestStop(sock string) error {
 		},
 	}
 	resp, err := client.Post("http://vfkit/vm/state", "application/json",
-		strings.NewReader(`{"state":"Stop"}`))
+		strings.NewReader(fmt.Sprintf(`{"state":%q}`, state)))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("vfkit REST stop: %s", resp.Status)
+		return fmt.Errorf("vfkit REST %s: %s", state, resp.Status)
 	}
 	return nil
 }

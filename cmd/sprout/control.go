@@ -112,6 +112,9 @@ type controlInfo struct {
 	// Zero means the sample failed.
 	MemBytes int64   `json:"memBytes"`
 	CPUPct   float64 `json:"cpuPct"`
+	// False from a daemon that predates `STOP hard` and would take it for a
+	// graceful STOP.
+	HardStop bool `json:"hardStop"`
 }
 
 // With MemBytes and CPUPct sampled, at the cost of two forks in the daemon.

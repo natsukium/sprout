@@ -50,8 +50,8 @@ identity](../explanation/instances.md) for default identity derivation.
 | `sprout status` | Describe one environment (its state, definition, and uptime or disk) and name the command most likely wanted next. Also what a bare `sprout` prints, so an environment you have forgotten the state of is one word away. `--json` prints the same facts as an object. |
 | `sprout list [-q\|--json] [--project]` | List every instance on this host. `-q` prints only IDs, one per line (`stop` takes one instance per invocation, through `-i` only, so compose with `sprout list -q \| xargs -n1 sprout stop -i`, or use `stop --all`); `--json` prints the listing rows as objects with raw metrics; `--project` narrows to the current repository's instances. The full record is `inspect`'s. |
 | `sprout inspect` | Print one instance's full record as JSON: every field of its `instance.json` (bundle, guest IP, PID, …) plus live state, metrics, and `routeLabel`: the hostname label `route` answers to for it, which is the sanitized name, or the ID when more than one instance answers to that label (a shared name, or distinct names sanitizing alike; see [name collisions](../how-to/route.md#when-two-instances-share-a-name)). The single-instance counterpart to `list --json`. |
-| `sprout stop [--all\|--project]` | Graceful shutdown; the persistent volume is kept. |
-| `sprout delete [--force] [--all\|--project]` | Stop the environment and permanently delete its state, including its persistent `/var` volume and any snapshots. Asks first; `--all` covers every instance on the host, `--project` only the current repository's, and either asks once for the whole set. |
+| `sprout stop [--hard] [--all\|--project]` | Graceful shutdown; the persistent volume is kept. `--hard` skips the guest shutdown; see [hard stop](#hard-stop). |
+| `sprout delete [--force] [--hard] [--all\|--project]` | Stop the environment and permanently delete its state, including its persistent `/var` volume and any snapshots. Asks first; `--all` covers every instance on the host, `--project` only the current repository's, and either asks once for the whole set. |
 | `sprout prune [--force]` | Delete every orphaned instance: stopped, with its worktree or branch gone (see the states table). A stopped instance you could still return to is left alone. |
 | `sprout snapshot create [--live] SNAP` | Save the instance's `/var` volume under `SNAP`. A copy-on-write clone where the filesystem has them, instant and costing no disk until the two images diverge; a full copy otherwise. Requires the instance stopped unless `--live`. |
 | `sprout snapshot list [--json]` | List the instance's snapshots, oldest first. `--json` prints them as an array with raw sizes. |
@@ -75,6 +75,7 @@ identity](../explanation/instances.md) for default identity derivation.
 | `--flake REF` | `up`, `run` | Flake reference to build from; default `.`. |
 | `--all` | `stop`, `delete` | Apply to every instance on the host. Mutually exclusive with `-i` and `--project`. |
 | `--project` | `stop`, `delete`, `list` | Narrow to the current repository's instances: those whose recorded repository root matches the directory you stand in. On `stop` and `delete`, mutually exclusive with `-i` and `--all`. |
+| `--hard` | `stop`, `delete` | Power the VM off without a guest shutdown, after a best-effort `sync` in the guest. See [hard stop](#hard-stop). |
 | `--live` | `snapshot create`, `fork` | Copy the volume of a *running* instance. The result is crash-consistent (what a power cut would have left) and is refused on a filesystem without copy-on-write clones, where the copy could not be atomic. |
 | `--port PORT` | `route serve`, `open` | For `route serve`, the host port to bind; default 80. URLs then carry it (`http://<name>.sprout.localhost:PORT/`). For `open`, the port the router is already serving on; the two have to agree. |
 | `--bind ADDR` | `forward`, `route serve` | Address to bind; default `localhost`, which binds both loopback families (`127.0.0.1` and `::1`) on the one port, since a browser may resolve `localhost` to either. A literal address binds only that address. A non-loopback address (`0.0.0.0`, a LAN/Tailscale IP) makes the listener reachable from that network. `0.0.0.0` is also the one non-root way onto a privileged port (<1024) on macOS; the restriction applies to specific addresses, so a LAN or Tailscale address below 1024 still needs root. For `forward` the exposure is bounded to the ports you name; for `route` it is broad: every instance's every port becomes reachable by Host header. |
@@ -125,6 +126,23 @@ delete the 2 instance(s) above, including their persistent /var volumes? [y/N]
 
 `delete --all` prompts once for the set. `--force` skips the prompt without
 changing the targets.
+
+## Hard stop
+
+`stop` and `delete` normally let the guest shut down: systemd stops every unit,
+then powers off. A process that ignores SIGTERM holds that up until systemd
+gives up on it, or until sprout forces the VM off.
+
+`--hard` skips the guest shutdown. sprout runs `sync` in the guest, so what
+the page cache holds reaches the workspace and the other host shares, then
+powers the VM off. A process still writing to a host share can leave a partial
+file there, and `/var` is left as a power cut leaves it; `delete` discards it
+anyway. A guest that does not answer the `sync` is powered off regardless.
+
+`--hard` also takes over a stop already under way, such as an idle auto-stop.
+A stop run by another `sprout stop` holds the instance until it returns, so
+interrupt that command first; the stop itself continues. An instance booted by
+a sprout that predates `--hard` refuses it; stop it without the flag.
 
 ## `sprout up` and `sprout start`
 

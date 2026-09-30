@@ -92,3 +92,49 @@ func askControl(t *testing.T, srv *controlServer, command string) string {
 	}
 	return line
 }
+
+func stopRecorder() (srv *controlServer, graceful, hard chan struct{}) {
+	graceful = make(chan struct{}, 4)
+	hard = make(chan struct{}, 4)
+	srv = &controlServer{
+		inst:     &Instance{Name: "webapp"},
+		stop:     func() { graceful <- struct{}{} },
+		hardStop: func() { hard <- struct{}{} },
+	}
+	return srv, graceful, hard
+}
+
+// A graceful STOP has already spent stopOnce when a `STOP hard` arrives, so
+// the power cut must not go through it.
+func TestStopHardEscalatesAGracefulStop(t *testing.T) {
+	srv, _, hard := stopRecorder()
+	if line := strings.TrimSpace(askControl(t, srv, "STOP")); line != "OK" {
+		t.Fatalf("STOP answered %q", line)
+	}
+	if line := strings.TrimSpace(askControl(t, srv, "STOP hard")); line != "OK hard" {
+		t.Fatalf("STOP hard answered %q, want the acknowledgment an old daemon cannot give", line)
+	}
+	select {
+	case <-hard:
+	case <-time.After(5 * time.Second):
+		t.Fatal("STOP hard after a graceful STOP never reached the power cut")
+	}
+}
+
+func TestStopAfterStopHardStartsNoGracefulStop(t *testing.T) {
+	srv, graceful, hard := stopRecorder()
+	askControl(t, srv, "STOP hard")
+	<-hard
+	askControl(t, srv, "STOP")
+	time.Sleep(100 * time.Millisecond)
+	if len(graceful) != 0 {
+		t.Fatal("a graceful stop started after the hard stop")
+	}
+}
+
+func TestInfoAdvertisesHardStop(t *testing.T) {
+	line := askControl(t, &controlServer{inst: &Instance{Name: "webapp"}}, "INFO brief")
+	if !strings.Contains(line, `"hardStop":true`) {
+		t.Fatalf("INFO does not advertise STOP hard: %s", line)
+	}
+}

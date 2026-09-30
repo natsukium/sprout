@@ -104,7 +104,7 @@ func reapOrphans(dir, sockDir string, m *Manifest) error {
 	// gracefulStop's ladder, with shorter waits: a user is watching a boot and
 	// the VM being drained is already unreachable.
 	if restSock, err := socketPathIn(sockDir, m.RestSocket); err == nil {
-		if err := vfkitRestStop(restSock); err == nil {
+		if err := vfkitRestState(restSock, "Stop"); err == nil {
 			if waitProcsGone(pids, 15*time.Second) {
 				return nil
 			}

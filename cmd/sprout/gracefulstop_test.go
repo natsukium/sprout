@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -12,37 +13,32 @@ import (
 
 // A stand-in for the vfkit runner: a shell that stays alive until signaled.
 // The compound command keeps sh from exec'ing the sleep away.
-func startFakeRunner(t *testing.T, script string) (*exec.Cmd, chan error) {
+func startFakeRunner(t *testing.T, script string) (*exec.Cmd, *runnerExit) {
 	t.Helper()
 	cmd := exec.Command("/bin/sh", "-c", script)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-	return cmd, waitCh
+	return cmd, watchRunner(cmd)
 }
 
-// The exit status goes back on the channel, since runDaemon's main select
-// still has to observe it after gracefulStop consumed it.
-func TestWaitExitRequeues(t *testing.T) {
-	waitCh := make(chan error, 1)
-	waitCh <- os.ErrClosed
-	if !waitExit(waitCh, time.Second) {
-		t.Fatal("waitExit missed a queued exit")
-	}
-	select {
-	case err := <-waitCh:
-		if err != os.ErrClosed {
-			t.Fatalf("requeued error changed: %v", err)
+// A stop path waiting on the runner and the daemon's main select must both
+// see one exit: neither may consume it from the other.
+func TestRunnerExitIsSeenByEveryObserver(t *testing.T) {
+	_, exit := startFakeRunner(t, "exit 3")
+	for i := range 2 {
+		if !exit.within(5 * time.Second) {
+			t.Fatalf("observer %d missed the runner exit", i)
 		}
-	default:
-		t.Fatal("exit status was consumed, not requeued")
+	}
+	if exit.err == nil {
+		t.Fatal("runner exit status was lost")
 	}
 
-	if waitExit(waitCh, 50*time.Millisecond) {
-		t.Fatal("waitExit reported an exit that never happened")
+	_, running := startFakeRunner(t, "sleep 300; :")
+	if running.within(50 * time.Millisecond) {
+		t.Fatal("within reported an exit that never happened")
 	}
 }
 
@@ -50,11 +46,11 @@ func TestWaitExitRequeues(t *testing.T) {
 // endpoint, so the ladder moves on to SIGTERM and the runner ends up gone.
 func TestGracefulStopFallsBackToSigterm(t *testing.T) {
 	dir := t.TempDir()
-	cmd, waitCh := startFakeRunner(t, "sleep 300; :")
+	cmd, exit := startFakeRunner(t, "sleep 300; :")
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(filepath.Join(dir, "vfkit-rest.sock"), cmd, waitCh)
+		gracefulStop(filepath.Join(dir, "vfkit-rest.sock"), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -101,11 +97,11 @@ func TestGracefulStopWalksTheWholeLadder(t *testing.T) {
 	restStopWait, sigtermWait = 200*time.Millisecond, 200*time.Millisecond
 	t.Cleanup(func() { restStopWait, sigtermWait = origRest, origTerm })
 
-	cmd, waitCh := startFakeRunner(t, "trap '' TERM; sleep 300; :")
+	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(sock, cmd, waitCh)
+		gracefulStop(sock, cmd, exit)
 		close(done)
 	}()
 	select {
@@ -119,8 +115,80 @@ func TestGracefulStopWalksTheWholeLadder(t *testing.T) {
 		t.Fatal("REST stop was never attempted")
 	}
 	select {
-	case <-waitCh:
+	case <-exit.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("runner survived the whole ladder")
+	}
+}
+
+// Serves vfkit's REST state endpoint on a socket short enough for macOS,
+// handing each requested state to onState.
+func serveFakeVfkit(t *testing.T, onState func(state string)) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "sprouths")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "vfkit-rest.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ State string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		onState(body.State)
+		w.WriteHeader(http.StatusOK)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return sock
+}
+
+// The runner exiting on vfkit's HardStop ends the stop at once, without the
+// signal ladder a runner ignoring SIGTERM would otherwise stretch out.
+func TestHardStopAsksVfkitForHardStop(t *testing.T) {
+	origTerm := sigtermWait
+	sigtermWait = time.Minute
+	t.Cleanup(func() { sigtermWait = origTerm })
+
+	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
+	states := make(chan string, 4)
+	sock := serveFakeVfkit(t, func(state string) {
+		states <- state
+		if state == "HardStop" {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		hardStop(sock, cmd, exit)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("hardStop did not return once vfkit powered the VM off")
+	}
+	if got := <-states; got != "HardStop" {
+		t.Fatalf("vfkit was asked for state %q, want HardStop", got)
+	}
+}
+
+// A vfkit that acknowledges HardStop but keeps running is still brought down
+// by signals, so a hard stop cannot hang.
+func TestHardStopFallsBackToSignals(t *testing.T) {
+	origHard, origTerm := hardStopWait, sigtermWait
+	hardStopWait, sigtermWait = 200*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { hardStopWait, sigtermWait = origHard, origTerm })
+
+	sock := serveFakeVfkit(t, func(string) {})
+	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
+
+	hardStop(sock, cmd, exit)
+	if !exit.within(5 * time.Second) {
+		t.Fatal("runner survived the hard stop's fallback")
 	}
 }
