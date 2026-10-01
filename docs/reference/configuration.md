@@ -121,6 +121,17 @@ inside. Under the hood the guest's `sprout-ready-notify` unit touches
 `/run/sprout/ready` on the data share; the host only ever stats its side of
 that directory.
 
+## Shutdown
+
+`sprout stop` asks the guest to power off, and forces the VM off if it has not
+done so within 30 seconds. The guest gives each unit 10 seconds to stop
+(`DefaultTimeoutStopSec`, lowered from systemd's 90) and then kills what is
+left, so a process that ignores SIGTERM still ends in a clean poweroff rather
+than the forced one. A service that needs longer to flush sets its own
+`systemd.services.<name>.serviceConfig.TimeoutStopSec` in `modules`; keep it
+well under the 30-second window, since a leftover process can be waited on a
+second time during the final kill.
+
 ## Credentials
 
 Every credential resolves to one of three strategies. A built-in fills in a
