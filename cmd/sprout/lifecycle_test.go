@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func mustDeleteTarget(t *testing.T, id string) deleteTarget {
@@ -182,7 +184,7 @@ func TestDeleteAllAsksOnceForTheWholeSet(t *testing.T) {
 			confirmIn = answered
 			t.Cleanup(func() { confirmIn = os.Stdin })
 
-			err := deleteInstances([]string{"cccc00000001", "cccc00000002"}, c.force)
+			err := deleteInstances([]string{"cccc00000001", "cccc00000002"}, c.force, false)
 			if c.wantError && err == nil {
 				t.Error("delete succeeded, want it aborted")
 			}
@@ -387,7 +389,7 @@ func TestDeleteAbortsOnASwappedIncarnation(t *testing.T) {
 
 	answerYesAfter(t, func() { swapInstanceDir(t, root, id, dir, "recreated") })
 
-	err := deleteInstances([]string{id}, false)
+	err := deleteInstances([]string{id}, false, false)
 	if err == nil {
 		t.Fatal("delete removed an instance that was replaced after the confirmation")
 	}
@@ -470,7 +472,7 @@ func TestDeleteReclaimsARecordlessGhostByID(t *testing.T) {
 		t.Fatalf("resolved %q, want %q", got.ID, id)
 	}
 
-	if err := deleteInstances([]string{got.ID}, true); err != nil {
+	if err := deleteInstances([]string{got.ID}, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -533,5 +535,182 @@ func TestInstanceIDsSkipHusks(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != "aaaa00000012" {
 		t.Fatalf("instanceIDs() = %v, want only the live instance beside %s", ids, dir)
+	}
+}
+
+// An ordered log shared by a fake daemon and the stubs a test installs.
+type eventLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *eventLog) add(e string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+// Only the events naming a stop or a sync, in order.
+func (l *eventLog) stopsAndSyncs() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, e := range l.events {
+		if e == "sync" || strings.HasPrefix(e, "STOP") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Answers control requests on dir's socket, logging each request line. An
+// answer with exit set tears the daemon down after it, as a daemon told to
+// stop does.
+func fakeControlDaemon(t *testing.T, dir string, log *eventLog, reply func(line string) (answer string, exit bool)) {
+	t.Helper()
+	sock := filepath.Join(dir, "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(conn).ReadString('\n')
+			line = strings.TrimSpace(line)
+			log.add(line)
+			answer, exit := reply(line)
+			fmt.Fprintln(conn, answer) //nolint:errcheck
+			conn.Close()
+			if exit {
+				ln.Close()
+				os.Remove(sock)
+				return
+			}
+		}
+	}()
+}
+
+func stubGuestSync(t *testing.T, fn func(id string) error) {
+	t.Helper()
+	orig := guestSync
+	guestSync = fn
+	t.Cleanup(func() { guestSync = orig })
+}
+
+// An older daemon takes `STOP hard` for a plain STOP, so --hard against one
+// must fail before sending any stop, or syncing for one.
+func TestHardStopRefusesADaemonThatPredatesIt(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000030"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := newTestInstance(t, root, id, "old-daemon", "var-data")
+	log := &eventLog{}
+	fakeControlDaemon(t, dir, log, func(line string) (string, bool) {
+		if strings.HasPrefix(line, "INFO") {
+			return `OK {"name":"old-daemon"}`, false
+		}
+		return "OK", strings.HasPrefix(line, "STOP")
+	})
+	stubGuestSync(t, func(string) error { log.add("sync"); return nil })
+
+	err := hardStopLocked(id, "old-daemon")
+	if err == nil || !strings.Contains(err.Error(), "predates --hard") {
+		t.Fatalf("hard stop against an old daemon: err = %v", err)
+	}
+	if got := log.stopsAndSyncs(); len(got) != 0 {
+		t.Fatalf("a refused hard stop still did %v", got)
+	}
+}
+
+// The sync has to finish before the power cut, and the hard path must never
+// send a plain STOP, which would start the graceful shutdown.
+func TestHardStopSyncsTheGuestBeforeStopHard(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000031"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := newTestInstance(t, root, id, "hard", "var-data")
+	log := &eventLog{}
+	fakeControlDaemon(t, dir, log, func(line string) (string, bool) {
+		switch {
+		case strings.HasPrefix(line, "INFO"):
+			return `OK {"name":"hard","hardStop":true}`, false
+		case line == "STOP hard":
+			return "OK hard", true
+		}
+		return "OK", line == "STOP"
+	})
+	stubGuestSync(t, func(string) error { log.add("sync"); return nil })
+
+	if err := hardStopLocked(id, "hard"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(log.stopsAndSyncs(), ","); got != "sync,STOP hard" {
+		t.Fatalf("events = %s, want the guest synced and then only STOP hard", got)
+	}
+}
+
+// A guest that cannot be synced is exactly the one --hard exists for, so the
+// power cut still goes ahead.
+func TestHardStopProceedsWhenGuestSyncFails(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000032"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := newTestInstance(t, root, id, "wedged", "var-data")
+	fakeControlDaemon(t, dir, &eventLog{}, func(line string) (string, bool) {
+		if strings.HasPrefix(line, "INFO") {
+			return `OK {"name":"wedged","hardStop":true}`, false
+		}
+		if line == "STOP hard" {
+			return "OK hard", true
+		}
+		return "OK", false
+	})
+	stubGuestSync(t, func(string) error { return errors.New("ssh: connect timed out") })
+
+	if err := hardStopLocked(id, "wedged"); err != nil {
+		t.Fatalf("hard stop gave up on an unreachable guest: %v", err)
+	}
+}
+
+// While `stop --hard` waits for the lifecycle lock, the instance it selected
+// can be deleted and re-created under the same ID; the power cut must not land
+// on the newcomer.
+func TestStopHardAbortsOnASwappedIncarnation(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000033"
+	t.Cleanup(func() { removeSocketDir(id) })
+	dir := newTestInstance(t, root, id, "selected", "var-data")
+	log := &eventLog{}
+	stubGuestSync(t, func(string) error { log.add("sync"); return nil })
+
+	lc, err := acquireLifecycleLock(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- stopOne(id, stopBehavior{hard: true}) }()
+	// Long enough for stopOne to reach the lock wait holding its marker.
+	time.Sleep(200 * time.Millisecond)
+
+	swapInstanceDir(t, root, id, dir, "recreated")
+	fakeControlDaemon(t, dir, log, func(line string) (string, bool) {
+		if strings.HasPrefix(line, "INFO") {
+			return `OK {"name":"recreated","hardStop":true}`, false
+		}
+		return "OK", false
+	})
+	lc.Close()
+
+	err = <-result
+	if err == nil || !strings.Contains(err.Error(), "changed since it was selected") {
+		t.Fatalf("stop --hard on a swapped incarnation: err = %v", err)
+	}
+	if got := log.stopsAndSyncs(); len(got) != 0 {
+		t.Fatalf("the re-created instance got %v", got)
 	}
 }

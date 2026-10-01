@@ -159,12 +159,14 @@ func socketBridge(ln net.Listener, hostSock string) {
 //	DIAL ssh        -> OK, then raw bidirectional stream to guest:22
 //	DIAL ip:port    -> OK, then raw bidirectional stream
 //	STOP            -> OK, then triggers graceful daemon shutdown
+//	STOP hard       -> OK hard, then powers the VM off with no guest shutdown
 type controlServer struct {
 	vn       *virtualnetwork.VirtualNetwork
 	inst     *Instance
 	started  time.Time
 	stopOnce sync.Once
 	stop     func()
+	hardStop func()
 	sessions *sessionTracker
 	// runnerPID is the vfkit child, whose CPU/memory INFO reports. inst.PID is
 	// the daemon, not the hypervisor, so it cannot stand in here.
@@ -225,6 +227,7 @@ func (s *controlServer) handle(ctx context.Context, conn net.Conn) {
 			Ready:      s.ready.Load(),
 			MemBytes:   stats.MemBytes,
 			CPUPct:     stats.CPUPct,
+			HardStop:   true,
 		})
 		fmt.Fprintf(conn, "OK %s\n", info)
 	case "DIAL":
@@ -250,6 +253,14 @@ func (s *controlServer) handle(ctx context.Context, conn net.Conn) {
 		}
 		pipe(conn, guest)
 	case "STOP":
+		if arg == "hard" {
+			fmt.Fprintln(conn, "OK hard")
+			// Also escalates a graceful stop already under way; one requested
+			// after this would only race the power cut.
+			s.stopOnce.Do(func() {})
+			s.hardStop()
+			return
+		}
 		fmt.Fprintln(conn, "OK")
 		s.stopOnce.Do(s.stop)
 	default:
