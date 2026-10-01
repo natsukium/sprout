@@ -10,7 +10,7 @@ All options below are the same whether you declare a VM through the
 | --- | --- | --- |
 | `vcpu` | `4` | Virtual CPUs. |
 | `mem` | `8192` | Memory: an integer MiB count, or a string with a unit (`"8GiB"`, `"512MiB"`). |
-| `diskSize` | `102400` | Persistent `/var` volume size (sparse); integer MiB or a unit string. |
+| `diskSize` | `102400` | Persistent `/var` volume size (sparse); integer MiB or a unit string. Host space from files deleted in `/var` returns at the guest's daily `fstrim`, or within minutes of the next boot if that run was missed; `services.fstrim` in `modules` overrides it. |
 | `workspace` | `true` | Mount the git toplevel at `/workspace` (virtiofs). |
 | `writableStore` | `false` | Overlay a writable `/nix/store` over the host share, so `nix build` works inside the guest. The overlay lives on the persistent `/var` volume, so big closures don't eat guest RAM and paths built once survive `stop`/`up`. |
 | `hostLoopback` | `false` | Let the guest reach the host's loopback at `192.168.127.254`. Opt-in because it exposes every `127.0.0.1` listener on the host to the guest; see [architecture](../explanation/architecture.md#what-the-guest-can-reach). |

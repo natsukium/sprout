@@ -80,6 +80,16 @@ in
   # one such process turns every stop into a power cut.
   systemd.settings.Manager.DefaultTimeoutStopSec = lib.mkDefault "10s";
 
+  # util-linux's fstrim.timer defers each run, including the Persistent
+  # catch-up after boot, by up to 100 min of random delay plus 1h of accuracy,
+  # re-drawn every boot. A guest stopped sooner keeps missing the trim, and
+  # var.img keeps the host blocks of everything deleted in /var.
+  services.fstrim.interval = lib.mkDefault "daily";
+  systemd.timers.fstrim.timerConfig = {
+    RandomizedDelaySec = lib.mkDefault "5min";
+    AccuracySec = lib.mkDefault "1min";
+  };
+
   nix.settings.experimental-features = lib.mkDefault [
     "nix-command"
     "flakes"
