@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -60,8 +62,22 @@ docs/how-to/run-as-daemon.md. --port must match the port it serves on.`,
 // A variable so tests can assert what URL was built without a browser window
 // appearing on whoever runs them.
 var openBrowser = func(url string) error {
-	return exec.Command("open", url).Run()
+	if runtime.GOOS != "linux" {
+		return exec.Command("open", url).Run()
+	}
+	// Without a graphical session xdg-open falls back to a terminal browser
+	// such as lynx, taking over the terminal sprout runs in.
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return errNoDisplay
+	}
+	err := exec.Command("xdg-open", url).Run()
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%w (xdg-open comes from xdg-utils)", err)
+	}
+	return err
 }
+
+var errNoDisplay = errors.New("no graphical session (neither DISPLAY nor WAYLAND_DISPLAY is set)")
 
 func cmdOpen(selector string, guestPort, routerPort int, domain, hostPrefix string, printOnly bool) error {
 	dom, err := cleanDomain(domain)
@@ -91,7 +107,11 @@ func cmdOpen(selector string, guestPort, routerPort int, domain, hostPrefix stri
 		fmt.Println(url)
 		return nil
 	}
-	if err := openBrowser(url); err != nil {
+	if err := openBrowser(url); errors.Is(err, errNoDisplay) {
+		fmt.Println(url)
+		fmt.Fprintf(os.Stderr, "%v, so no browser was opened; open the URL above yourself\n", err)
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("could not open %s: %w", url, err)
 	}
 	fmt.Println(url)
@@ -148,8 +168,8 @@ func routerReachable(routerPort int) error {
 	msg := fmt.Sprintf("no router is listening on %s; start one with: sprout route serve", addr)
 	if routerPort != 80 {
 		msg += fmt.Sprintf(" --port %d", routerPort)
-	} else {
-		msg += "\nmacOS refuses a non-root bind of :80, so that needs either `--port 8080` (and `sprout open --port 8080`) or the launchd job in docs/how-to/run-as-daemon.md"
+	} else if help := missingRouterPort80Help(runtime.GOOS, unprivilegedPortStart(runtime.GOOS)); help != "" {
+		msg += "\n" + help
 	}
 	return fmt.Errorf("%s", msg)
 }

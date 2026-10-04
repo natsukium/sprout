@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,7 +103,10 @@ func TestOpenReportsAMissingRouter(t *testing.T) {
 
 // On :80 the obvious fix does not work: macOS refuses a non-root loopback bind
 // there, so "start a router" alone would send the user into a second failure.
-func TestMissingRouterOnPort80NamesTheMacOSRestriction(t *testing.T) {
+func TestMissingRouterOnPort80OffersAnUnprivilegedPort(t *testing.T) {
+	if unprivilegedPortStart(runtime.GOOS) <= 80 {
+		t.Skip("this host lets a non-root process bind :80")
+	}
 	if conn, err := net.Dial("tcp", "127.0.0.1:80"); err == nil {
 		conn.Close()
 		t.Skip("something is already serving 127.0.0.1:80")
@@ -153,5 +158,44 @@ func TestOpenLaunchesTheInstancesURL(t *testing.T) {
 	want := "http://3000.feat-login.sprout.localhost:" + strconv.Itoa(port) + "/"
 	if opened != want {
 		t.Errorf("opened %q, want %q — the branch name has to reach the browser sanitized", opened, want)
+	}
+}
+
+// A host without a graphical session gets the URL to open itself, not a failure.
+func TestOpenWithoutDisplayHandsOverTheURL(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	newTestInstance(t, root, "aaaa0000bbbb", "feat/login", "var-data")
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	restore := openBrowser
+	openBrowser = func(string) error { return errNoDisplay }
+	t.Cleanup(func() { openBrowser = restore })
+
+	out := captureStdout(t, func() error {
+		return cmdOpen("aaaa0000bbbb", 3000, port, defaultRouteDomain, "", false)
+	})
+	want := "http://3000.feat-login.sprout.localhost:" + strconv.Itoa(port) + "/"
+	if strings.TrimSpace(out) != want {
+		t.Errorf("stdout = %q, want the URL %q", out, want)
+	}
+}
+
+// Without either display variable, xdg-open would fall back to a terminal
+// browser, so the Linux opener must refuse before launching anything.
+func TestOpenBrowserRefusesWithoutADisplayOnLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the display check is Linux-only")
+	}
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	if err := openBrowser("http://example.invalid/"); !errors.Is(err, errNoDisplay) {
+		t.Errorf("openBrowser without a display = %v, want errNoDisplay", err)
 	}
 }

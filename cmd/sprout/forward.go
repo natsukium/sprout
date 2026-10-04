@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -123,7 +124,7 @@ func cmdForward(selector, bind string, args []string) error {
 func listenHostPort(bindHost string, port int) ([]net.Listener, error) {
 	lns, err := bindListeners(bindHost, port)
 	if errors.Is(err, errPrivilegedBind) {
-		return nil, fmt.Errorf("%w — rerun with --bind 0.0.0.0 to bind all interfaces instead", err)
+		return nil, fmt.Errorf("%w — %s", err, forwardPrivilegedBindHelp(runtime.GOOS, port))
 	}
 	// The probe domain is arbitrary: a router marks every response it
 	// writes itself (Server: sprout-route), including for a Host it does
@@ -183,7 +184,7 @@ func bindListener(bindHost string, port int) (net.Listener, error) {
 	if err == nil {
 		return ln, nil
 	}
-	if bindHost != "0.0.0.0" && port < 1024 && errors.Is(err, syscall.EACCES) {
+	if privilegedBindRefused(runtime.GOOS, bindHost, port, unprivilegedPortStart(runtime.GOOS), err) {
 		return nil, fmt.Errorf("%w (%s:%d)", errPrivilegedBind, bindHost, port)
 	}
 	if errors.Is(err, syscall.EADDRINUSE) {
@@ -191,8 +192,6 @@ func bindListener(bindHost string, port int) (net.Listener, error) {
 	}
 	return nil, fmt.Errorf("listen %s:%d: %w", bindHost, port, err)
 }
-
-var errPrivilegedBind = errors.New("macOS forbids a non-root bind on a privileged port (<1024) against a specific address")
 
 func forwardResolver(selector string) (func() (*Identity, error), error) {
 	if selector != "" {
