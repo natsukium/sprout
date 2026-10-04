@@ -212,11 +212,11 @@ func TestReapOrphansKillsTheSurvivingVM(t *testing.T) {
 
 // Only the framework's storage-device wording is worth reinterpreting; anything
 // else passes through untouched so the caller's report stays the whole story.
-func TestTranslateRunnerFailure(t *testing.T) {
+func TestVfkitRunnerFailureHint(t *testing.T) {
 	const dir = "/state/sprout/instances/6a7f9b51b885"
 	vzDiskInUse := `Error Domain=VZErrorDomain Code=2 Description="Invalid virtual machine configuration. The storage device attachment is invalid."`
 
-	if got := translateRunnerFailure(vzDiskInUse, dir); !strings.Contains(got, filepath.Join(dir, "var.img")) {
+	if got := vfkitRunnerFailureHint(vzDiskInUse, dir); !strings.Contains(got, filepath.Join(dir, "var.img")) {
 		t.Errorf("storage-device failure translated to %q, want it to name the disk image", got)
 	}
 
@@ -226,8 +226,8 @@ func TestTranslateRunnerFailure(t *testing.T) {
 		`Error Domain=VZErrorDomain Code=2 Description="Invalid virtual machine configuration. The memory size is invalid."`,
 	}
 	for _, out := range unrelated {
-		if got := translateRunnerFailure(out, dir); got != "" {
-			t.Errorf("translateRunnerFailure(%q) = %q, want no hint", out, got)
+		if got := vfkitRunnerFailureHint(out, dir); got != "" {
+			t.Errorf("vfkitRunnerFailureHint(%q) = %q, want no hint", out, got)
 		}
 	}
 }

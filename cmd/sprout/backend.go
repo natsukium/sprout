@@ -52,7 +52,10 @@ type controlProtocol interface {
 }
 
 type consoleMode interface {
-	writer(consoleLog string) io.Writer
+	writer(consoleLog string) (io.WriteCloser, error)
+	// Whether console.log carries the runner's whole output, which makes
+	// runner.log a duplicate not worth showing.
+	mirrorsRunnerLog() bool
 }
 
 // A nil entry is a value the schema defines but this sprout cannot run yet:
@@ -64,11 +67,11 @@ var (
 	}
 	controlProtocols = map[string]controlProtocol{
 		"vfkit-rest": vfkitREST{},
-		"qmp":        nil,
+		"qmp":        qmpControl{},
 	}
 	consoleModes = map[string]consoleMode{
 		"pty-announce": ptyAnnounce{},
-		"stdio":        nil,
+		"stdio":        stdioConsole{},
 	}
 )
 
@@ -119,7 +122,12 @@ type backendKind struct {
 	runnerArgs func(sockDir, instDir string) []argMatcher
 	// Optional: a hint for a runner failure only this kind can explain.
 	failureHint func(runnerOutput, instDir string) string
+	// The kind's shares exist only as sidecars, so it cannot boot while
+	// sidecarsSupervised is false, even from a manifest that lists none.
+	sharesNeedSidecars bool
 }
+
+var sidecarsSupervised = false
 
 var backendKinds = []*backendKind{
 	{
@@ -132,7 +140,7 @@ var backendKinds = []*backendKind{
 				deviceSocketArg("virtio-net", "unixSocketPath", socketIn(instDir)),
 			}
 		},
-		failureHint: translateRunnerFailure,
+		failureHint: vfkitRunnerFailureHint,
 	},
 	{
 		name:       "qemu",
@@ -141,6 +149,8 @@ var backendKinds = []*backendKind{
 		runnerArgs: func(sockDir, _ string) []argMatcher {
 			return []argMatcher{deviceSocketArg("stream", "addr.path", socketIn(sockDir))}
 		},
+		failureHint:        qemuRunnerFailureHint,
+		sharesNeedSidecars: true,
 	},
 }
 
@@ -175,7 +185,8 @@ func kindNames(kinds []*backendKind) string {
 }
 
 func (k *backendKind) implemented() bool {
-	return networkTransports[k.vocabulary.network] != nil &&
+	return (!k.sharesNeedSidecars || sidecarsSupervised) &&
+		networkTransports[k.vocabulary.network] != nil &&
 		controlProtocols[k.vocabulary.control] != nil &&
 		consoleModes[k.vocabulary.console] != nil
 }
@@ -301,7 +312,7 @@ func unknownVocabulary[T any](what, value string, known map[string]T) error {
 }
 
 func (c *backendContract) bootable() error {
-	if c.network == nil || c.control == nil || c.console == nil || len(c.sidecars) > 0 {
+	if !c.kind.implemented() || (len(c.sidecars) > 0 && !sidecarsSupervised) {
 		return notImplementedError(c.kind.name)
 	}
 	return nil
