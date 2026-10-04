@@ -14,7 +14,7 @@ func TestForkLiveSucceedsOnCoW(t *testing.T) {
 	t.Chdir(work)
 
 	srcID := "cccc2222dddd"
-	t.Cleanup(func() { removeSocketDir(srcID) })
+	cleanupSocketDir(t, srcID)
 	srcDir := newTestInstance(t, root, srcID, "source", "running /var")
 	pointBundleAtRealDir(t, srcID)
 
@@ -25,7 +25,7 @@ func TestForkLiveSucceedsOnCoW(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	(&fakeDaemon{}).serve(t, filepath.Join(srcDir, "control.sock"))
+	(&fakeDaemon{}).serve(t, daemonControlSocket(t, srcDir))
 
 	if err := cmdFork(srcID, true, "forked"); err != nil {
 		t.Fatalf("fork --live: %v", err)

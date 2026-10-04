@@ -388,7 +388,7 @@ func deleteOne(t deleteTarget) error {
 		return err
 	}
 	// The socket directory symlink lives outside t.dir (see socketdir.go).
-	removeSocketDir(t.id)
+	removeSocketDir(t.dir)
 	fmt.Printf("instance %q deleted\n", name)
 	return nil
 }
@@ -520,6 +520,6 @@ func pruneOne(t deleteTarget) (bool, error) {
 	if err := removeInstanceDir(t.id, t.dir); err != nil {
 		return false, err
 	}
-	removeSocketDir(t.id)
+	removeSocketDir(t.dir)
 	return true, nil
 }

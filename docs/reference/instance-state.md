@@ -14,9 +14,9 @@
         ├── var.img                   # persistent /var (sparse)
         ├── var.img.restoring         # transient staging file during `snapshot restore`
         ├── run.sh                    # per-instance runner (placeholders substituted)
-        ├── control.sock              # daemon control socket (present while running)
-        ├── net.sock                  # backend network socket into the embedded network stack
-        ├── vfkit-rest.sock           # backend control socket used by graceful stop (vm-control.sock, QMP, under QEMU)
+        ├── sock/control.sock         # daemon control socket (present while running)
+        ├── sock/net.sock             # backend network socket into the embedded network stack
+        ├── sock/vfkit-rest.sock      # backend control socket used by graceful stop (vm-control.sock, QMP, under QEMU)
         ├── daemon.lock               # held by the running daemon (see below)
         ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
         ├── runner.log                # vfkit runner output (`sprout logs`)
@@ -53,10 +53,13 @@ Unix socket addresses are capped near 104 bytes (`sockaddr_un.sun_path`),
 while the instance directory's depth follows the state root, which can be
 arbitrarily deep — a self-hosted CI runner's home is enough to overflow it.
 Socket system calls (bind and dial, in sprout and in vfkit) therefore address
-the sockets through `/tmp/sprout-<uid>/<id>`, a symlink to the instance
-directory, whose length does not depend on the state root.
+the sockets through `/tmp/sprout-<uid>/<hash>/sock`, where `<hash>` is a
+symlink to the instance directory, so the length does not depend on the state
+root. `<hash>` is derived from the instance directory's path rather than the
+instance ID, so the same repository and branch under two state roots get
+separate links and their daemons never reach each other's sockets.
 
-The socket *files* stay in the instance directory: the layout above is
+The socket *files* stay in the instance directory's `sock/`: the layout above is
 complete, and deleting the instance directory removes them. The symlink is
 disposable — every bind and dial recreates it, so a `/tmp` cleaner removing it
 does not cut off a running instance. `sprout delete` and `sprout prune` remove

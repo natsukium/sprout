@@ -123,7 +123,7 @@ func TestAcquireInstanceLockExcludesASecondHolder(t *testing.T) {
 func TestAcquireBootLockHandsOffOnceTheWinnerServes(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "bootlockserve"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestAcquireBootLockHandsOffOnceTheWinnerServes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
+	(&fakeDaemon{}).serve(t, daemonControlSocket(t, dir))
 
 	if _, err := claimInstanceLocked(dir, 5*time.Second, func() bool { return instanceRunning(id) }); !errors.Is(err, errInstanceNowServing) {
 		t.Fatalf("claimInstanceLocked returned %v, want errInstanceNowServing", err)
@@ -146,7 +146,7 @@ func TestAcquireBootLockHandsOffOnceTheWinnerServes(t *testing.T) {
 func TestAcquireBootLockTimesOutWithoutADaemon(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	const id = "bootlocktimeout"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := t.TempDir()
 	held, err := acquireInstanceLock(dir, time.Second)
 	if err != nil {

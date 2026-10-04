@@ -284,7 +284,8 @@ func holdLockAndServeLater(t *testing.T, dir string, delay time.Duration) {
 	}
 	t.Cleanup(func() { held.Close() })
 
-	pending := filepath.Join(dir, "control.sock.pending")
+	sock := daemonControlSocket(t, dir)
+	pending := sock + ".pending"
 	ln, err := net.Listen("unix", pending)
 	if err != nil {
 		t.Fatal(err)
@@ -302,7 +303,7 @@ func holdLockAndServeLater(t *testing.T, dir string, delay time.Duration) {
 	}()
 	go func() {
 		time.Sleep(delay)
-		_ = os.Rename(pending, filepath.Join(dir, "control.sock"))
+		_ = os.Rename(pending, sock)
 	}()
 }
 
@@ -312,7 +313,7 @@ func holdLockAndServeLater(t *testing.T, dir string, delay time.Duration) {
 func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "upbootrace"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -356,7 +357,7 @@ func upIdentity(root, id string) *Identity {
 func TestPrepareUpBootCommitsTheRecordAndRetiresTheToken(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00001111"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 
 	tok, err := publishAttempt(id, dir)
@@ -404,7 +405,7 @@ func TestPrepareUpBootCommitsTheRecordAndRetiresTheToken(t *testing.T) {
 func TestPrepareUpBootAbortsWhenTheInstanceWasRecreated(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00001112"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 
 	tok, err := publishAttempt(id, dir)
@@ -448,7 +449,7 @@ func TestPrepareUpBootKeepsTheTokenWhenReconcileFails(t *testing.T) {
 	storePath := anyStoreDir(t)
 	root := shortStateRoot(t)
 	const id = "aaaa00001113"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 
 	tok, err := publishAttempt(id, dir)

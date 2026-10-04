@@ -377,7 +377,7 @@ func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle stri
 	if err := checkUpCompatible(id, dir, manifest); err != nil {
 		return nil, nil, err
 	}
-	if err := checkInstanceSocketPaths(id.ID, manifest); err != nil {
+	if err := checkInstanceSocketPaths(dir, manifest); err != nil {
 		return nil, nil, err
 	}
 	if instanceRunning(id.ID) {
@@ -530,7 +530,7 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 	if err := resetStaleHostTrust(dir); err != nil {
 		return err
 	}
-	sockDir, err := ensureSocketDir(socketDirBase(), inst.ID, dir)
+	sockDir, err := prepareSocketDir(socketDirBase(), dir)
 	if err != nil {
 		return err
 	}

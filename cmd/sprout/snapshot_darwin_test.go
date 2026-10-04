@@ -16,7 +16,7 @@ import (
 func TestSnapshotLiveSucceedsOnCoW(t *testing.T) {
 	root := shortStateRoot(t)
 	id := "cccc1111dddd"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "feature", "running /var")
 
 	// Stand in for the daemon: the lock is held for its whole life, and the
@@ -26,7 +26,7 @@ func TestSnapshotLiveSucceedsOnCoW(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
+	(&fakeDaemon{}).serve(t, daemonControlSocket(t, dir))
 
 	if err := cmdSnapshotCreate(id, true, "hot"); err != nil {
 		t.Fatalf("snapshot create --live: %v", err)

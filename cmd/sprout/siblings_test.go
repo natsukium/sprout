@@ -20,7 +20,7 @@ func seedRunningSibling(t *testing.T, root, id, name, worktree string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	(&fakeDaemon{sawTrack: make(chan bool, 1)}).serve(t, filepath.Join(dir, "control.sock"))
+	(&fakeDaemon{sawTrack: make(chan bool, 1)}).serve(t, daemonControlSocket(t, dir))
 }
 
 // After a branch switch in place, the previous branch's instance keeps running

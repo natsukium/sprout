@@ -103,7 +103,7 @@ func startForeground(id *Identity) error {
 		lock.Close()
 		return err
 	}
-	if err := checkInstanceSocketPaths(id.ID, manifest); err != nil {
+	if err := checkInstanceSocketPaths(dir, manifest); err != nil {
 		lock.Close()
 		return err
 	}

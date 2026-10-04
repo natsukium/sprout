@@ -89,7 +89,7 @@ func TestPrepareUpBootRefusesAPlatformChangeBeforeTouchingTheInstance(t *testing
 		t.Run(c.what, func(t *testing.T) {
 			root := shortStateRoot(t)
 			id := []string{"cccc00000001", "cccc00000002", "cccc00000003", "cccc00000004"}[i]
-			t.Cleanup(func() { removeSocketDir(id) })
+			cleanupSocketDir(t, id)
 			dir := filepath.Join(root, "sprout", "instances", id)
 			tok, err := publishAttempt(id, dir)
 			if err != nil {
@@ -112,7 +112,7 @@ func TestPrepareUpBootRefusesAPlatformChangeBeforeTouchingTheInstance(t *testing
 			secret := filepath.Join(credentialsDir(dir), "token")
 			mustWrite(t, secret, "s3cret")
 			record := readFileString(t, instanceRecordPath(dir))
-			(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
+			(&fakeDaemon{}).serve(t, daemonControlSocket(t, dir))
 
 			keepToken := false
 			_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, m, 0, &keepToken)
@@ -147,7 +147,7 @@ func TestPrepareUpBootRefusesADiskWithoutAReadableRecord(t *testing.T) {
 		t.Run(c.what, func(t *testing.T) {
 			root := shortStateRoot(t)
 			const id = "cccc00000010"
-			t.Cleanup(func() { removeSocketDir(id) })
+			cleanupSocketDir(t, id)
 			dir := filepath.Join(root, "sprout", "instances", id)
 			tok, err := publishAttempt(id, dir)
 			if err != nil {
@@ -176,7 +176,7 @@ func TestPrepareUpBootRefusesADiskWithoutAReadableRecord(t *testing.T) {
 func TestPrepareUpBootRecordsTheBundlePlatform(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "cccc00000020"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	tok, err := publishAttempt(id, dir)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestUpAdoptsALegacyDarwinRecord(t *testing.T) {
 	pretendHost(t, "aarch64-darwin")
 	root := shortStateRoot(t)
 	const id = "cccc00000030"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	tok, err := publishAttempt(id, dir)
 	if err != nil {
@@ -282,7 +282,7 @@ func TestStartRefusesAPlatformChangeBeforeRewritingTheRecord(t *testing.T) {
 		t.Run(c.what, func(t *testing.T) {
 			root := shortStateRoot(t)
 			id := []string{"dddd00000001", "dddd00000002", "dddd00000003", "dddd00000004"}[i]
-			t.Cleanup(func() { removeSocketDir(id) })
+			cleanupSocketDir(t, id)
 			dir := filepath.Join(root, "sprout", "instances", id)
 			bundle := filepath.Join(root, "bundle")
 			if err := os.MkdirAll(bundle, 0o700); err != nil {
@@ -319,7 +319,7 @@ func TestStartRefusesAPlatformChangeBeforeRewritingTheRecord(t *testing.T) {
 func TestStartRefusesADiskWithoutAReadableRecord(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "dddd00000010"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	mustWrite(t, instanceRecordPath(dir), "{not json")
 	mustWrite(t, varImagePath(dir), "disk")
@@ -471,7 +471,7 @@ func TestUpReportsADiskWithoutARecordForAnIDSelector(t *testing.T) {
 	withBootableHostBackend(t)
 	root := shortStateRoot(t)
 	const id = "ffff00000001"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	mustWrite(t, instanceRecordPath(dir), "{not json")
 	mustWrite(t, varImagePath(dir), "disk")
@@ -505,7 +505,7 @@ func hostManifestWithNetworkSocket(t *testing.T, name string) (*Manifest, []byte
 func TestPrepareUpBootRefusesAnOverlongSocketBeforeStoppingTheVM(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "cccc00000050"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	tok, err := publishAttempt(id, dir)
 	if err != nil {
@@ -519,7 +519,7 @@ func TestPrepareUpBootRefusesAnOverlongSocketBeforeStoppingTheVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := readFileString(t, instanceRecordPath(dir))
-	(&fakeDaemon{}).serve(t, filepath.Join(dir, "control.sock"))
+	(&fakeDaemon{}).serve(t, daemonControlSocket(t, dir))
 
 	keepToken := false
 	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", filepath.Join(root, "bundle"), m, 0, &keepToken)
@@ -540,7 +540,7 @@ func TestStartRefusesAnOverlongSocketBeforeRewritingTheRecord(t *testing.T) {
 	withBootableHostBackend(t)
 	root := shortStateRoot(t)
 	const id = "dddd00000030"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	bundle := filepath.Join(root, "bundle")
 	m, data := hostManifestWithNetworkSocket(t, strings.Repeat("n", 100)+".sock")

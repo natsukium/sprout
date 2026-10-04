@@ -134,7 +134,7 @@ func TestForkLiveRefusesAHeldSourceWithNoDaemon(t *testing.T) {
 	t.Chdir(work)
 
 	srcID := "eeee2222ffff"
-	t.Cleanup(func() { removeSocketDir(srcID) })
+	cleanupSocketDir(t, srcID)
 	srcDir := newTestInstance(t, root, srcID, "source", "running /var")
 
 	lock, err := acquireInstanceLock(srcDir, 0)

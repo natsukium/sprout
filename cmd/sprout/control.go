@@ -17,11 +17,24 @@ func controlDial(id string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	sock, err := socketPath(id, dir, controlSocketName)
+	sock, err := socketPath(dir, controlSocketName)
 	if err != nil {
 		return nil, err
 	}
-	return net.DialTimeout("unix", sock, 2*time.Second)
+	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err == nil {
+		return conn, nil
+	}
+	if old, ok := preUpgradeControlSocket(dir); ok {
+		if conn, oldErr := net.DialTimeout("unix", old, 2*time.Second); oldErr == nil {
+			if err := pointIDLinkAt(dir); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return conn, nil
+		}
+	}
+	return nil, err
 }
 
 // Every verb answers one status line beginning with OK or ERR. The reader is

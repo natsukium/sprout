@@ -66,7 +66,7 @@ func TestDeleteRunningInstanceReportsOnlyDeletion(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", root)
 	const id = "aaaa00000003"
 	dir := newTestInstance(t, root, id, "running", "var-data")
-	ln, err := net.Listen("unix", filepath.Join(dir, "control.sock"))
+	ln, err := net.Listen("unix", daemonControlSocket(t, dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestDeleteRunningInstanceReportsOnlyDeletion(t *testing.T) {
 func TestStopOneToleratesConcurrentStop(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000007"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestStopOneToleratesConcurrentStop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sock := filepath.Join(dir, "control.sock")
+	sock := daemonControlSocket(t, dir)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -455,7 +455,7 @@ func TestDeleteReclaimsARecordlessGhostByID(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)
 	const id = "abcd00000099"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir, err := instanceDir(id)
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +568,7 @@ func (l *eventLog) stopsAndSyncs() []string {
 // stop does.
 func fakeControlDaemon(t *testing.T, dir string, log *eventLog, reply func(line string) (answer string, exit bool)) {
 	t.Helper()
-	sock := filepath.Join(dir, "control.sock")
+	sock := daemonControlSocket(t, dir)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -607,7 +607,7 @@ func stubGuestSync(t *testing.T, fn func(id string) error) {
 func TestHardStopRefusesADaemonThatPredatesIt(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000030"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "old-daemon", "var-data")
 	log := &eventLog{}
 	fakeControlDaemon(t, dir, log, func(line string) (string, bool) {
@@ -632,7 +632,7 @@ func TestHardStopRefusesADaemonThatPredatesIt(t *testing.T) {
 func TestHardStopSyncsTheGuestBeforeStopHard(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000031"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "hard", "var-data")
 	log := &eventLog{}
 	fakeControlDaemon(t, dir, log, func(line string) (string, bool) {
@@ -659,7 +659,7 @@ func TestHardStopSyncsTheGuestBeforeStopHard(t *testing.T) {
 func TestHardStopProceedsWhenGuestSyncFails(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000032"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "wedged", "var-data")
 	fakeControlDaemon(t, dir, &eventLog{}, func(line string) (string, bool) {
 		if strings.HasPrefix(line, "INFO") {
@@ -683,7 +683,7 @@ func TestHardStopProceedsWhenGuestSyncFails(t *testing.T) {
 func TestStopHardAbortsOnASwappedIncarnation(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000033"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "selected", "var-data")
 	log := &eventLog{}
 	stubGuestSync(t, func(string) error { log.add("sync"); return nil })

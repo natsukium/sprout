@@ -191,7 +191,7 @@ func TestSnapshotLiveRefusesAHeldInstanceWithNoDaemon(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)
 	id := "aaaa7777bbbb"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := newTestInstance(t, root, id, "feature", "data")
 
 	lock, err := acquireInstanceLock(dir, 0)
