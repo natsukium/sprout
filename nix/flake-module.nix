@@ -6,6 +6,7 @@
 { localInputs }:
 {
   config,
+  options,
   lib,
   withSystem,
   ...
@@ -14,19 +15,24 @@ let
   sproutLib = import ./lib.nix { inherit localInputs lib; };
   systems = import ./systems.nix;
   targets = lib.filter (s: lib.elem s config.systems) systems.hosts;
-  # Host-side credential scripts render for this one system in every host's
-  # bundle, since sprout.vms is evaluated once.
-  thunkSystem = if targets == [ ] then null else builtins.head targets;
   pkgsFor = hostSystem: withSystem hostSystem ({ pkgs, ... }: pkgs);
+  # The definitions are merged again per host rather than read from
+  # config.sprout.vms: built-in credentials render host-side scripts from
+  # hostPkgs, and a single shared merge would record one host's scripts in
+  # every host's bundle.
+  vmsByHost = lib.genAttrs targets (
+    hostSystem:
+    (lib.mergeDefinitions [ "sprout" "vms" ] (lib.types.attrsOf (
+      sproutLib.vmTypeWith (pkgsFor hostSystem) [ ]
+    )) options.sprout.vms.definitionsWithLocations).mergedValue
+  );
 in
 {
   options.sprout.vms = lib.mkOption {
-    # hostPkgs reaches the built-in modules as a lazy thunk: withSystem would
-    # throw in a flake that does not target the host system, but it is only
-    # forced when a definition reads a host-side script (gh's materialize
-    # exec), which can only happen for a targeted host below.
     type = lib.types.attrsOf (
-      sproutLib.vmTypeWith (if thunkSystem == null then { } else (pkgsFor thunkSystem)) [ ]
+      sproutLib.vmTypeWith
+        (throw "sprout: config.sprout.vms has no host; read host-side values from sproutConfigurations.<system>.<name>.manifest")
+        [ ]
     );
     default = { };
     description = "Disposable development microVM definitions.";
@@ -35,7 +41,9 @@ in
   config.flake = lib.mkIf (config.sprout.vms != { }) {
     sproutConfigurations = lib.genAttrs targets (
       hostSystem:
-      lib.mapAttrs (name: vmCfg: sproutLib.mkBundle (pkgsFor hostSystem) name vmCfg) config.sprout.vms
+      lib.mapAttrs (
+        name: vmCfg: sproutLib.mkBundle (pkgsFor hostSystem) name vmCfg
+      ) vmsByHost.${hostSystem}
     );
     nixosConfigurations = lib.mkMerge (
       map (
@@ -43,7 +51,7 @@ in
         lib.mapAttrs' (
           name: vmCfg:
           lib.nameValuePair "sprout-${hostSystem}-${name}" (sproutLib.mkGuest (pkgsFor hostSystem) name vmCfg)
-        ) config.sprout.vms
+        ) vmsByHost.${hostSystem}
       ) targets
     );
   };
