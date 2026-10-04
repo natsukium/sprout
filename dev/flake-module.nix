@@ -5,12 +5,6 @@
     inputs.git-hooks.flakeModule
   ];
 
-  # Only this partition's outputs gain Linux; packages.sprout stays darwin-only.
-  systems = [
-    "aarch64-linux"
-    "x86_64-linux"
-  ];
-
   perSystem =
     {
       config,
@@ -35,6 +29,10 @@
           check-merge-conflicts.enable = true;
         };
       };
+
+      # `nix flake check` only evaluates `packages`, so a stale vendorHash or a
+      # host-specific build break would otherwise pass.
+      checks.sprout = config.packages.sprout;
 
       devShells.default = pkgs.mkShell {
         packages = [

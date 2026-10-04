@@ -36,9 +36,6 @@ jobs:
       - run: nix develop -c go vet ./...
       # -race because the network stack and the idle watcher are concurrent.
       - run: nix develop -c go test -race ./...
-      # `nix flake check` evaluates `packages` without building it, so nothing
-      # else here catches a vendorHash left stale by a go.mod change.
-      - run: nix build .#sprout --print-build-logs
 
   linux:
     name: go (linux)
