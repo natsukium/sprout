@@ -63,9 +63,10 @@ let
       # accept combinations the runners cannot boot.
       guestSystem = systems.guestFor hostSystem;
       backend = backends.${systems.resolveBackend hostSystem vmCfg.backend} {
-        inherit guest;
+        inherit guest mem;
         socketPlaceholder = placeholderFor "sock";
       };
+      mem = parseSize vmCfg.mem;
       # Which fields a credential needs depends on its strategy, so entry.nix
       # cannot mark any of them mandatory; checked here instead.
       credentials = lib.mapAttrs (
@@ -137,7 +138,7 @@ let
             networking.hostName = lib.mkDefault "sprout-${name}";
             microvm = {
               inherit (vmCfg) vcpu;
-              mem = parseSize vmCfg.mem;
+              inherit mem;
               vmHostPackages = hostPkgs;
               # The store comes in via virtiofs instead of an erofs image:
               # no image rebuild on every guest change.

@@ -162,6 +162,7 @@ in
             );
           refusedFor = needle: cfg: builtins.any (lib.hasInfix needle) (refusals cfg);
           withModule = host: module: guestOn host { modules = [ module ]; };
+          memOn = host: mem: (guestOn host { inherit mem; }).microvm.mem;
           nic =
             host:
             let
@@ -183,6 +184,16 @@ in
             ];
             netSubstituted = true;
           };
+          sizes = [
+            512
+            2047
+            2048
+            "2048MiB"
+            "2GiB"
+            2049
+            4096
+            "8GiB"
+          ];
           failures = lib.runTests {
             testX86_64RunnerDialsTheNetSocketWithTheLeaseMac = {
               expr = nic "x86_64-linux";
@@ -191,6 +202,32 @@ in
             testAarch64RunnerDialsTheNetSocketWithTheLeaseMac = {
               expr = nic "aarch64-linux";
               expected = expectedNic (vmOn "aarch64-linux" { }).manifest.guest.mac;
+            };
+            testX86_64MicrovmNeverBootsWithExactly2048MiB = {
+              expr = map (memOn "x86_64-linux") sizes;
+              expected = [
+                512
+                2047
+                2050
+                2050
+                2050
+                2049
+                4096
+                8192
+              ];
+            };
+            testAarch64VirtKeepsTheRequestedMemory = {
+              expr = map (memOn "aarch64-linux") sizes;
+              expected = [
+                512
+                2047
+                2048
+                2048
+                2048
+                2049
+                4096
+                8192
+              ];
             };
             testDefaultLinuxGuestsPassEveryQemuCheck = {
               expr = map (host: refusals (guestOn host { })) [
@@ -202,6 +239,12 @@ in
                 [ ]
               ];
             };
+            testForcing2048MiBOnMicrovmIsRefused = {
+              expr = refusedFor "exactly 2048 MiB" (
+                withModule "x86_64-linux" { microvm.mem = lib.mkForce 2048; }
+              );
+              expected = true;
+            };
             testQemuWithoutStreamNetdevIsRefused = {
               expr = refusedFor "QEMU 7.2 or newer" (
                 withModule "x86_64-linux" (
@@ -212,6 +255,37 @@ in
                 )
               );
               expected = true;
+            };
+            testMemoryOrMachineInExtraArgsIsRefused = {
+              expr =
+                map
+                  (
+                    arg:
+                    refusedFor "not microvm.qemu.extraArgs" (
+                      withModule "x86_64-linux" {
+                        microvm.qemu.extraArgs = [
+                          arg
+                          "x"
+                        ];
+                      }
+                    )
+                  )
+                  [
+                    "-m"
+                    "--m"
+                    "-M"
+                    "--M"
+                    "-machine"
+                    "--machine"
+                  ];
+              expected = [
+                true
+                true
+                true
+                true
+                true
+                true
+              ];
             };
           };
         in

@@ -1,4 +1,4 @@
-{ guest, socketPlaceholder }:
+{ guest, socketPlaceholder, ... }:
 let
   network = "net.sock";
   control = "vfkit-rest.sock";
