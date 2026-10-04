@@ -194,6 +194,9 @@ let
               writableStoreOverlay = lib.mkIf vmCfg.writableStore "/var/nix-rw-store";
               inherit (backend) shares;
 
+              # fsType stays microvm.nix's ext4 default: the daemon reads the
+              # ext4 superblock to tell a finished format from an interrupted
+              # one (cmd/sprout/orphan.go).
               volumes = [
                 {
                   image = "var.img";
