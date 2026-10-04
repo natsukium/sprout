@@ -55,6 +55,25 @@ func startNetwork(ctx context.Context, netSock string, m *Manifest) (*virtualnet
 	return vn, nil
 }
 
+// One session per runner process; the loop covers runner restarts within the
+// daemon's lifetime.
+func serveNICSessions(ctx context.Context, backend string, accept func() (net.Conn, error), session func(context.Context, net.Conn) error) {
+	for {
+		conn, err := accept()
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("%s network accept: %v", backend, err)
+			}
+			return
+		}
+		go func() {
+			if err := session(ctx, conn); err != nil && ctx.Err() == nil {
+				log.Printf("%s network session ended: %v", backend, err)
+			}
+		}()
+	}
+}
+
 // Wildcard domains resolve here, at the gateway's resolver, rather than in a
 // guest-side resolver on loopback: kubelet and docker copy the guest's
 // /etc/resolv.conf into other network namespaces, where a loopback nameserver
