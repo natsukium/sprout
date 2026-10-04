@@ -33,7 +33,10 @@
 A daemon holds `daemon.lock` for its lifetime. The kernel releases the lock on
 any process exit, so a boot that acquires it can clean up a VM process left by
 a crashed daemon. On Linux the runner is started with `PDEATHSIG`, so a crashed
-daemon takes QEMU with it; the cleanup covers a runner that ignored it.
+daemon takes QEMU with it; the cleanup covers a runner that ignored it. The
+runner's own children are beyond both, so a Linux boot also waits for any
+other process holding `var.img`, such as a first boot's `mkfs` left by a
+crashed daemon, to close it.
 
 Concurrent `up`/`start` calls converge on the lock rather than failing: a
 caller that finds it held waits for the holder to start serving control, then

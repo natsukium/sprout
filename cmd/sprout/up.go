@@ -543,6 +543,9 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 	if err := reapOrphans(dir, socks, manifest); err != nil {
 		return err
 	}
+	if err := awaitDiskReleased(dir); err != nil {
+		return err
+	}
 	if remedy := guestGitRemedy(manifest, inst); remedy != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s keeps its git data in %s, which is outside the /workspace mount; git run inside the guest will report it as not a repository (%s)\n", inst.Workspace, inst.RepoRoot, remedy)
 	}

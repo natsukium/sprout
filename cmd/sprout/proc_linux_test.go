@@ -210,3 +210,53 @@ func TestDetachedDaemonSurvivesTerminalHangup(t *testing.T) {
 		t.Fatal("the detached daemon died with its terminal")
 	}
 }
+
+// A leftover writer of var.img (a runner's mkfs outliving its daemon) holds
+// the boot until it lets go, and a holder that never does fails the boot by
+// name instead of sharing the disk.
+func TestAwaitDiskReleasedWaitsForALeftoverHolder(t *testing.T) {
+	dir := t.TempDir()
+	img := varImagePath(dir)
+	if err := os.WriteFile(img, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitDiskReleased(dir); err != nil {
+		t.Fatalf("unheld disk: %v", err)
+	}
+
+	orig := diskReleaseWait
+	t.Cleanup(func() { diskReleaseWait = orig })
+	startHolder := func() *exec.Cmd {
+		f, err := os.Open(img)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		holder := exec.Command("sleep", "300")
+		holder.Stdin = f
+		if err := holder.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
+		return holder
+	}
+
+	stuck := startHolder()
+	diskReleaseWait = 300 * time.Millisecond
+	err := awaitDiskReleased(dir)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("process %d (sleep)", stuck.Process.Pid)) {
+		t.Fatalf("held disk: error = %v, want the holder named", err)
+	}
+	_ = stuck.Process.Kill()
+	_ = stuck.Wait()
+
+	finishing := startHolder()
+	diskReleaseWait = time.Minute
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = finishing.Process.Kill()
+	}()
+	if err := awaitDiskReleased(dir); err != nil {
+		t.Fatalf("holder that exits: %v", err)
+	}
+}

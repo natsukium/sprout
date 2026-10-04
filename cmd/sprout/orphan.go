@@ -179,3 +179,30 @@ func runnerLogTail(path string, n int64) string {
 	read, _ := f.Read(buf)
 	return string(buf[:read])
 }
+
+// Bounds the wait for a leftover holder of var.img, long enough for the
+// mkfs a first boot runs to finish on its own.
+var diskReleaseWait = 30 * time.Second
+
+// A runner's own children are neither the runner nor fingerprinted, so
+// neither PDEATHSIG nor reapOrphans reaches them: microvm.nix's runner
+// formats var.img with mkfs before it execs the VM, and a daemon killed
+// meanwhile leaves mkfs writing the image. The next runner skips formatting
+// an image that exists and would boot it under the writer. Waited for rather
+// than killed, since a holder that is not a runner child is not sprout's to
+// kill.
+func awaitDiskReleased(dir string) error {
+	img := varImagePath(dir)
+	holders := varImageHolders(img)
+	if len(holders) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "waiting for %s to close %s …\n", strings.Join(holders, ", "), img)
+	if pollUntil(diskReleaseWait, 250*time.Millisecond, func() bool {
+		holders = varImageHolders(img)
+		return len(holders) == 0
+	}) {
+		return nil
+	}
+	return fmt.Errorf("%s still has %s open after %s; booting now would share the disk with it, so stop it and retry", strings.Join(holders, ", "), img, diskReleaseWait)
+}

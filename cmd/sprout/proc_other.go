@@ -12,3 +12,8 @@ func startManaged(cmd *exec.Cmd) (*runnerExit, error) {
 	}
 	return watchRunner(cmd), nil
 }
+
+// Not scanned without /proc; under vfkit a second holder surfaces instead as
+// the framework's storage-attachment error, which vfkitRunnerFailureHint
+// explains.
+func varImageHolders(string) []string { return nil }

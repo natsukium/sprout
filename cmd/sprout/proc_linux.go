@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -45,4 +49,29 @@ func startManaged(cmd *exec.Cmd) (*runnerExit, error) {
 		return nil, err
 	}
 	return exit, nil
+}
+
+// Each holder as "process <pid> (<comm>)". Only processes this user may
+// inspect are seen, which covers anything a runner of this user left.
+func varImageHolders(img string) []string {
+	target, err := filepath.EvalSymlinks(img)
+	if err != nil {
+		return nil
+	}
+	fds, _ := filepath.Glob("/proc/[0-9]*/fd/*")
+	seen := map[string]bool{}
+	var holders []string
+	for _, fd := range fds {
+		pid := strings.Split(fd, "/")[2]
+		if seen[pid] {
+			continue
+		}
+		if link, err := os.Readlink(fd); err != nil || link != target {
+			continue
+		}
+		seen[pid] = true
+		comm, _ := os.ReadFile(filepath.Join("/proc", pid, "comm"))
+		holders = append(holders, fmt.Sprintf("process %s (%s)", pid, strings.TrimSpace(string(comm))))
+	}
+	return holders
 }
