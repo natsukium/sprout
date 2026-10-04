@@ -134,7 +134,10 @@ let
         system = guestSystem;
         modules = [
           localInputs.microvm.nixosModules.microvm
-          (import ./guest/base.nix { inherit guest dataMount; })
+          (import ./guest/base.nix {
+            inherit guest dataMount;
+            inherit (hostPkgs.stdenv) hostPlatform;
+          })
           {
             networking.hostName = lib.mkDefault "sprout-${name}";
             microvm = {
