@@ -38,18 +38,31 @@ jobs:
       - run: nix develop -c go test -race ./...
 
   linux:
-    name: go (linux)
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 15
+    name: flake check / go (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { system: x86_64-linux, runner: ubuntu-24.04 }
+          - { system: aarch64-linux, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+      - uses: Mic92/niks3-action@12d3e320b2a99b7938f9634bd337cd9fec104609 # v1.1.0
+        with:
+          server-url: https://niks3.natsukium.com
+      - run: nix flake check --print-build-logs
       - run: nix develop -c go vet ./...
       - run: nix develop -c go test -race ./...
 
   guests:
-    name: guest closure (${{ matrix.example }}/${{ matrix.vm }})
-    runs-on: ubuntu-24.04-arm
+    name: guest closure (${{ matrix.host }}, ${{ matrix.example }}/${{ matrix.vm }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -58,9 +71,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { example: minimal, vm: dev }
-          - { example: podman, vm: todo }
-          - { example: k3s, vm: todo }
+          - { host: aarch64-darwin, runner: ubuntu-24.04-arm, example: minimal, vm: dev }
+          - { host: aarch64-darwin, runner: ubuntu-24.04-arm, example: podman, vm: todo }
+          - { host: aarch64-darwin, runner: ubuntu-24.04-arm, example: k3s, vm: todo }
+          - { host: aarch64-linux, runner: ubuntu-24.04-arm, example: minimal, vm: dev }
+          - { host: x86_64-linux, runner: ubuntu-24.04, example: minimal, vm: dev }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
@@ -71,4 +86,4 @@ jobs:
       # bundle is a two-file runCommand whose substitution value is nil (users
       # build their own project's bundle, not an example's), while this closure
       # is the base system every guest shares.
-      - run: nix build ./examples/${{ matrix.example }}#nixosConfigurations.sprout-aarch64-darwin-${{ matrix.vm }}.config.system.build.toplevel --print-build-logs
+      - run: nix build ./examples/${{ matrix.example }}#nixosConfigurations.sprout-${{ matrix.host }}-${{ matrix.vm }}.config.system.build.toplevel --print-build-logs
