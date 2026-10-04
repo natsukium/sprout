@@ -50,7 +50,7 @@ func TestGracefulStopFallsBackToSigterm(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(filepath.Join(dir, "vfkit-rest.sock"), cmd, exit)
+		gracefulStop(vfkitREST{}, filepath.Join(dir, "vfkit-rest.sock"), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -101,7 +101,7 @@ func TestGracefulStopWalksTheWholeLadder(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(sock, cmd, exit)
+		gracefulStop(vfkitREST{}, sock, cmd, exit)
 		close(done)
 	}()
 	select {
@@ -164,7 +164,7 @@ func TestHardStopAsksVfkitForHardStop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		hardStop(sock, cmd, exit)
+		hardStop(vfkitREST{}, sock, cmd, exit)
 		close(done)
 	}()
 	select {
@@ -187,7 +187,7 @@ func TestHardStopFallsBackToSignals(t *testing.T) {
 	sock := serveFakeVfkit(t, func(string) {})
 	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
 
-	hardStop(sock, cmd, exit)
+	hardStop(vfkitREST{}, sock, cmd, exit)
 	if !exit.within(5 * time.Second) {
 		t.Fatal("runner survived the hard stop's fallback")
 	}

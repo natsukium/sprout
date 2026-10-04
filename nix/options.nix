@@ -9,6 +9,11 @@ let
   vmModule = {
     imports = import ./modules;
     options = {
+      backend = lib.mkOption {
+        type = lib.types.enum ([ "auto" ] ++ builtins.attrNames (import ./backends));
+        default = "auto";
+        description = "VM backend. `auto` picks the host's default (vfkit on aarch64-darwin, qemu on Linux); a named backend fails evaluation for any host that does not allow it.";
+      };
       vcpu = lib.mkOption {
         type = lib.types.int;
         default = 4;

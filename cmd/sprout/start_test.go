@@ -74,12 +74,7 @@ func TestStartForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m := &Manifest{Version: manifestSchemaVersion}
-	m.Guest.IP = "127.0.0.1"
-	m.Guest.SSHUser = "sprout"
-	if err := writeJSON(filepath.Join(bundle, "manifest.json"), m); err != nil {
-		t.Fatal(err)
-	}
+	writeHostManifest(t, bundle)
 	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
 		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1",
 	}); err != nil {

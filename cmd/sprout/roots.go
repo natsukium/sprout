@@ -67,15 +67,22 @@ func canonicalBundlePath(recorded, display string) (string, error) {
 	return canonical, nil
 }
 
-// Runs under the boot lock with the lifecycle lock still held (migration
-// publishes a token, which requires it). Every boot pins unconditionally: a
-// resolving symlink is no proof of registration. Any failure returns before
-// the token sweep — retained staging may be the record's only protection.
 func reconcileRoots(dir string, inst *Instance) error {
 	canonical, err := canonicalBundlePath(inst.Bundle, inst.Name)
 	if err != nil {
 		return err
 	}
+	return pinRecordedBundle(dir, inst, canonical)
+}
+
+// The write half of reconcileRoots, for a caller that must inspect the
+// resolved bundle before anything is rewritten. Runs under the boot lock with
+// the lifecycle lock still held (migration publishes a token, which requires
+// it). Every boot pins unconditionally: a resolving symlink is no proof of
+// registration. Any failure returns before the token sweep — retained staging
+// may be the record's only protection.
+func pinRecordedBundle(dir string, inst *Instance, canonical string) error {
+	var err error
 	if storeRoot, ok := storeRootOf(canonical); ok {
 		err = pinStoreBundle(dir, inst, canonical, storeRoot)
 	} else {

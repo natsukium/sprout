@@ -16,19 +16,22 @@ import (
 type Manifest struct {
 	Version    int    `json:"version"`
 	Definition string `json:"definition"`
-	Guest      struct {
+	Host       struct {
+		System string `json:"system"`
+	} `json:"host"`
+	Guest struct {
+		System    string `json:"system"`
 		IP        string `json:"ip"`
 		GatewayIP string `json:"gatewayIp"`
 		Subnet    string `json:"subnet"`
 		MAC       string `json:"mac"`
 		SSHUser   string `json:"sshUser"`
 	} `json:"guest"`
-	Workspace bool `json:"workspace"`
+	Backend   BackendSpec `json:"backend"`
+	Workspace bool        `json:"workspace"`
 	// HostLoopback lets the guest reach the host's 127.0.0.1 through the
 	// gateway alias.
-	HostLoopback bool   `json:"hostLoopback"`
-	GuestArch    string `json:"guestArch"`
-	RestSocket   string `json:"restSocket"`
+	HostLoopback bool `json:"hostLoopback"`
 	// Idle drives auto-stop: "stop" powers the instance off after After of no
 	// activity, "none" disables it. Activity is SSH sessions plus router
 	// connections that opt in with the DIAL "track" suffix.
@@ -47,6 +50,8 @@ type Manifest struct {
 		Placeholder string `json:"placeholder"`
 		Value       string `json:"value"`
 	} `json:"substitutions"`
+
+	contract *backendContract
 }
 
 // CredentialSpec's used fields depend on Strategy: `mount` reads Source, a
@@ -178,17 +183,54 @@ func (e *instanceNotFoundError) Error() string {
 }
 func (e *instanceNotFoundError) Unwrap() error { return os.ErrNotExist }
 
-const manifestSchemaVersion = 1
+const manifestSchemaVersion = 2
+
+// Version 1 predates the backend contract; only vfkit on this host ever
+// booted it, which is what lets it be read as an implicit vfkit contract.
+const legacyHostSystem = "aarch64-darwin"
 
 // An unsupported schema version fails loudly, rather than booting with
 // silently ignored instructions.
-func jsonUnmarshalStrictVersion(data []byte, m *Manifest) error {
-	if err := json.Unmarshal(data, m); err != nil {
+func parseManifest(data []byte, host string) (*Manifest, error) {
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	switch m.Version {
+	case manifestSchemaVersion:
+	case 1:
+		if err := migrateManifestV1(data, &m, host); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("manifest version %d is not supported by this sprout binary; upgrade sprout", m.Version)
+	}
+	contract, err := parseBackendContract(&m, host)
+	if err != nil {
+		return nil, err
+	}
+	m.contract = contract
+	return &m, nil
+}
+
+func migrateManifestV1(data []byte, m *Manifest, host string) error {
+	if host != legacyHostSystem {
+		return fmt.Errorf("this bundle uses manifest version 1, which only %s hosts boot; rebuild with a sprout flake that emits manifest v2", legacyHostSystem)
+	}
+	var v1 struct {
+		GuestArch  string `json:"guestArch"`
+		RestSocket string `json:"restSocket"`
+	}
+	if err := json.Unmarshal(data, &v1); err != nil {
 		return err
 	}
-	if m.Version != manifestSchemaVersion {
-		return fmt.Errorf("manifest version %d is not supported by this sprout binary", m.Version)
-	}
+	m.Host.System = host
+	m.Guest.System = v1.GuestArch
+	vfkit := lookupBackendKind("vfkit").vocabulary
+	m.Backend = BackendSpec{Kind: "vfkit"}
+	m.Backend.Network.Transport, m.Backend.Network.Socket = vfkit.network, netSocketName
+	m.Backend.Control.Protocol, m.Backend.Control.Socket = vfkit.control, v1.RestSocket
+	m.Backend.Console.Mode = vfkit.console
 	return nil
 }
 

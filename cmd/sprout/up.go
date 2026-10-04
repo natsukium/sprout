@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -327,6 +326,9 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 	if err != nil {
 		return err
 	}
+	if err := manifest.contract.bootable(); err != nil {
+		return err
+	}
 
 	if bundlePath != "" {
 		def = manifest.Definition
@@ -508,7 +510,11 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 	if err != nil {
 		return err
 	}
-	if err := reapOrphans(dir, sockDir, manifest); err != nil {
+	socks, err := resolveInstanceSockets(sockDir, manifest)
+	if err != nil {
+		return err
+	}
+	if err := reapOrphans(dir, socks, manifest); err != nil {
 		return err
 	}
 	if remedy := guestGitRemedy(manifest, inst); remedy != "" {
@@ -539,17 +545,16 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 		return err
 	}
 
-	socks, err := resolveInstanceSockets(sockDir, manifest)
-	if err != nil {
-		return err
-	}
 	subs := map[string]string{
 		"netSocket":  socks.net,
-		"restSocket": socks.rest,
+		"restSocket": socks.vmControl,
 		"dataDir":    dataDir(dir),
 		"workspace":  inst.Workspace,
 		"gitCommon":  inst.RepoRoot,
 		"consolePty": "virtio-serial,pty",
+	}
+	for name, path := range socks.named {
+		subs["socket:"+name] = path
 	}
 	// Start empty: a SIGKILLed daemon skips the cleanup below, and a credential
 	// dropped from the definition would keep its stale file alive.
@@ -585,26 +590,31 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 // over-long one aborts here by name instead of surfacing mid-boot as a bare
 // EINVAL.
 type instanceSockets struct {
-	net     string
+	dir string
+	// The daemon's own control socket.
 	control string
+	net     string
 	// Substituted into the runner absolute: microvm.nix expands a relative
 	// socket against the runner's cwd, the instance directory the short path
 	// exists to avoid (see nix/bundle.nix).
-	rest string
+	vmControl string
+	// Every backend socket by its manifest name.
+	named map[string]string
 }
 
 func resolveInstanceSockets(sockDir string, m *Manifest) (instanceSockets, error) {
-	var s instanceSockets
+	s := instanceSockets{dir: sockDir, named: map[string]string{}}
 	var err error
-	if s.net, err = socketPathIn(sockDir, netSocketName); err != nil {
-		return s, err
-	}
 	if s.control, err = socketPathIn(sockDir, controlSocketName); err != nil {
 		return s, err
 	}
-	if s.rest, err = socketPathIn(sockDir, m.RestSocket); err != nil {
-		return s, err
+	for _, name := range m.contract.socketNames() {
+		if s.named[name], err = socketPathIn(sockDir, name); err != nil {
+			return s, err
+		}
 	}
+	s.net = s.named[m.contract.networkSocket]
+	s.vmControl = s.named[m.contract.controlSocket]
 	return s, nil
 }
 
@@ -631,11 +641,11 @@ func loadManifest(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	var m Manifest
-	if err := jsonUnmarshalStrictVersion(data, &m); err != nil {
+	host, err := hostNixSystem()
+	if err != nil {
 		return nil, err
 	}
-	return &m, nil
+	return parseManifest(data, host)
 }
 
 // The runner's shell quoting was fixed at Nix eval time, before any value
@@ -682,53 +692,6 @@ func rewriteRunner(runnerPath string, m *Manifest, subs map[string]string, out s
 	return os.WriteFile(out, []byte(rewritten), 0o700)
 }
 
-var ptyPattern = regexp.MustCompile(`/dev/ttys[0-9]+`)
-
-// Long enough to reassemble a "/dev/ttysNNN" split across two writes, short
-// enough that watching an unbounded log never grows the buffer.
-const ptyWatcherCarry = 64
-
-// Scans runner output for the console PTY vfkit announces. The PTY has to be
-// opened read-write and drained continuously: the kernel blocks boot until the
-// device is opened, and a full buffer stalls the console.
-type ptyWatcher struct {
-	consoleLog string
-	once       bool
-	buf        []byte
-}
-
-func (w *ptyWatcher) Write(p []byte) (int, error) {
-	if !w.once {
-		w.buf = append(w.buf, p...)
-		if m := ptyPattern.Find(w.buf); m != nil {
-			w.once = true
-			go w.attach(string(m))
-		} else if len(w.buf) > ptyWatcherCarry {
-			w.buf = w.buf[len(w.buf)-ptyWatcherCarry:]
-		}
-	}
-	return len(p), nil
-}
-
-func (w *ptyWatcher) attach(path string) {
-	pty, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "console attach %s: %v\n", path, err)
-		return
-	}
-	logf, err := os.Create(w.consoleLog)
-	if err != nil {
-		pty.Close()
-		return
-	}
-	fmt.Printf("console: %s (log: %s)\n", path, w.consoleLog)
-	go func() {
-		defer pty.Close()
-		defer logf.Close()
-		io.Copy(logf, pty) //nolint:errcheck
-	}()
-}
-
 func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks instanceSockets) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -751,8 +714,8 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	}
 	defer runnerLog.Close()
 
-	watcher := &ptyWatcher{consoleLog: consoleLogPath(dir)}
-	output := io.MultiWriter(runnerLog, watcher)
+	console := m.contract.console.writer(consoleLogPath(dir))
+	output := io.MultiWriter(runnerLog, console)
 
 	cmd := exec.Command(runScript)
 	cmd.Dir = dir
@@ -764,20 +727,21 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	fmt.Printf("instance %q booting (runner pid %d) …\n", inst.Name, cmd.Process.Pid)
 
 	exit := watchRunner(cmd)
+	ctl := m.contract.control
 
 	var stopRequested atomic.Bool
-	stop := func() { stopRequested.Store(true); go gracefulStop(socks.rest, cmd, exit) }
+	stop := func() { stopRequested.Store(true); go gracefulStop(ctl, socks.vmControl, cmd, exit) }
 	var hardOnce sync.Once
 	hard := func() {
 		stopRequested.Store(true)
-		hardOnce.Do(func() { go hardStop(socks.rest, cmd, exit) })
+		hardOnce.Do(func() { go hardStop(ctl, socks.vmControl, cmd, exit) })
 	}
 	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), runnerPID: cmd.Process.Pid}
 	if err := serveControl(ctx, socks.control, srv); err != nil {
 		// The runner is already up; returning without stopping it would strand
 		// a vfkit holding var.img with no control socket, invisible to every
 		// probe until the next boot's orphan reaper finds it.
-		gracefulStop(socks.rest, cmd, exit)
+		gracefulStop(ctl, socks.vmControl, cmd, exit)
 		return err
 	}
 
@@ -809,7 +773,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 		// guest that powered itself off is not a failure.
 		if !srv.ready.Load() && !stopRequested.Load() {
 			msg := fmt.Sprintf("runner exited before the VM became reachable: %v (see %s)", err, logPath)
-			if hint := translateRunnerFailure(runnerLogTail(logPath, runnerLogTailBytes), dir); hint != "" {
+			if hint := m.contract.runnerFailureHint(runnerLogTail(logPath, runnerLogTailBytes), dir); hint != "" {
 				msg += "\n" + hint
 			}
 			return errors.New(msg)
@@ -880,10 +844,10 @@ var (
 	sigtermWait  = 15 * time.Second
 )
 
-// restSock must be sun_path-safe (see socketdir.go): vfkit bound the same file
-// relative to the instance directory.
-func gracefulStop(restSock string, cmd *exec.Cmd, exit *runnerExit) {
-	if err := vfkitRestState(restSock, "Stop"); err == nil && exit.within(restStopWait) {
+// sock must be sun_path-safe (see socketdir.go): the runner bound the same
+// file relative to the instance directory.
+func gracefulStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {
+	if err := ctl.requestStop(sock, false); err == nil && exit.within(restStopWait) {
 		return
 	}
 	killRunner(cmd, exit)
@@ -893,8 +857,8 @@ func gracefulStop(restSock string, cmd *exec.Cmd, exit *runnerExit) {
 // Virtualization.framework, so vfkit still exits on its own.
 var hardStopWait = 5 * time.Second
 
-func hardStop(restSock string, cmd *exec.Cmd, exit *runnerExit) {
-	if err := vfkitRestState(restSock, "HardStop"); err == nil && exit.within(hardStopWait) {
+func hardStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {
+	if err := ctl.requestStop(sock, true); err == nil && exit.within(hardStopWait) {
 		return
 	}
 	killRunner(cmd, exit)
@@ -932,26 +896,4 @@ func (e *runnerExit) within(d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
-}
-
-func vfkitRestState(sock, state string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", sock)
-			},
-		},
-	}
-	resp, err := client.Post("http://vfkit/vm/state", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"state":%q}`, state)))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("vfkit REST %s: %s", state, resp.Status)
-	}
-	return nil
 }

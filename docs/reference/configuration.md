@@ -8,6 +8,7 @@ All options below are the same whether you declare a VM through the
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `backend` | `"auto"` | VM backend. `"auto"` resolves per host bundle: `vfkit` on `aarch64-darwin`, `qemu` on Linux. A named backend the host does not allow fails evaluation of that host's bundle with the allowed list; today each host allows exactly one. |
 | `vcpu` | `4` | Virtual CPUs. |
 | `mem` | `8192` | Memory: an integer MiB count, or a string with a unit (`"8GiB"`, `"512MiB"`). |
 | `diskSize` | `102400` | Persistent `/var` volume size (sparse); integer MiB or a unit string. Host space from files deleted in `/var` returns at the guest's daily `fstrim`, or within minutes of the next boot if that run was missed; `services.fstrim` in `modules` overrides it. |
@@ -88,7 +89,7 @@ attrset, which you nest under that host's system:
 ```
 
 `pkgs` is the **host** package set: the runner is a host artifact, and the
-host's system selects the guest system and hypervisor, while the guest closure
+host's system selects the guest system and the default backend, while the guest closure
 is built from sprout's own pinned nixpkgs. The result is byte-for-byte the
 bundle the flake-parts module produces for the same options, so every command,
 option, and guest feature behaves identically.

@@ -82,18 +82,28 @@ func startForeground(id *Identity) error {
 		lock.Close()
 		return err
 	}
-	// Lazy migration: a legacy record is resolved, pinned, and rewritten
-	// before anything reads the bundle.
-	if err := reconcileRoots(dir, inst); err != nil {
-		lock.Close()
-		return err
-	}
-	lc.Close()
-	manifest, err := loadManifest(filepath.Join(inst.Bundle, "manifest.json"))
+	// Lazy migration: a legacy record is resolved here and pinned and
+	// rewritten below, only once its bundle has been accepted, so a refusal
+	// leaves the record and its root as they were.
+	canonical, err := canonicalBundlePath(inst.Bundle, inst.Name)
 	if err != nil {
 		lock.Close()
 		return err
 	}
+	manifest, err := loadManifest(filepath.Join(canonical, "manifest.json"))
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	if err := manifest.contract.bootable(); err != nil {
+		lock.Close()
+		return err
+	}
+	if err := pinRecordedBundle(dir, inst, canonical); err != nil {
+		lock.Close()
+		return err
+	}
+	lc.Close()
 	return bootInstanceLocked(dir, inst, manifest, lock)
 }
 

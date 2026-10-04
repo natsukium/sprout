@@ -322,12 +322,8 @@ func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m := &Manifest{Version: manifestSchemaVersion}
-	m.Guest.IP = "127.0.0.1"
-	m.Guest.SSHUser = "sprout"
-	if err := writeJSON(filepath.Join(bundle, "manifest.json"), m); err != nil {
-		t.Fatal(err)
-	}
+	writeHostManifest(t, bundle)
+	withBootableHostBackend(t)
 	// The record's bundle matches the one being booted, so the post-handoff
 	// re-check must settle on "already running" rather than a reboot.
 	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{

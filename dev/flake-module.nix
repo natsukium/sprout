@@ -2,6 +2,7 @@
   inputs,
   self,
   lib,
+  withSystem,
   ...
 }:
 let
@@ -76,6 +77,78 @@ in
           pkgs.runCommand "guest-host-gating" { } "touch $out"
         else
           throw "guest host gating: ${builtins.toJSON failures}";
+
+      checks.backend-selection =
+        let
+          hostPkgs = host: withSystem host ({ pkgs, ... }: pkgs);
+          manifestOf =
+            host: backend:
+            (self.lib.mkVM {
+              pkgs = hostPkgs host;
+              inherit backend;
+            }).manifest;
+          contractOf = host: backend: {
+            inherit (manifestOf host backend) version host;
+            kind = (manifestOf host backend).backend.kind;
+            guest = (manifestOf host backend).guest.system;
+          };
+          refused =
+            host: backend: !(builtins.tryEval (builtins.deepSeq (manifestOf host backend) true)).success;
+          failures = lib.runTests {
+            testAutoResolvesToVfkitOnDarwin = {
+              expr = contractOf "aarch64-darwin" "auto";
+              expected = {
+                version = 2;
+                host.system = "aarch64-darwin";
+                kind = "vfkit";
+                guest = "aarch64-linux";
+              };
+            };
+            testAutoResolvesToQemuOnAarch64Linux = {
+              expr = contractOf "aarch64-linux" "auto";
+              expected = {
+                version = 2;
+                host.system = "aarch64-linux";
+                kind = "qemu";
+                guest = "aarch64-linux";
+              };
+            };
+            testAutoResolvesToQemuOnX86_64Linux = {
+              expr = contractOf "x86_64-linux" "auto";
+              expected = {
+                version = 2;
+                host.system = "x86_64-linux";
+                kind = "qemu";
+                guest = "x86_64-linux";
+              };
+            };
+            testExplicitAllowedKindIsKept = {
+              expr = (contractOf "aarch64-darwin" "vfkit").kind;
+              expected = "vfkit";
+            };
+            testQemuOnDarwinFailsEvaluation = {
+              expr = refused "aarch64-darwin" "qemu";
+              expected = true;
+            };
+            testVfkitOnLinuxFailsEvaluation = {
+              expr = refused "x86_64-linux" "vfkit";
+              expected = true;
+            };
+            testDefaultIsAuto = {
+              expr =
+                (contractOf "x86_64-linux" "auto") == {
+                  inherit (self.sproutConfigurations.x86_64-linux.dev.manifest) version host;
+                  kind = self.sproutConfigurations.x86_64-linux.dev.manifest.backend.kind;
+                  guest = self.sproutConfigurations.x86_64-linux.dev.manifest.guest.system;
+                };
+              expected = true;
+            };
+          };
+        in
+        if failures == [ ] then
+          pkgs.runCommand "backend-selection" { } "touch $out"
+        else
+          throw "backend selection: ${builtins.toJSON failures}";
 
       devShells.default = pkgs.mkShell {
         packages = [
