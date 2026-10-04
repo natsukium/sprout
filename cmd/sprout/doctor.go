@@ -52,6 +52,10 @@ func cmdDoctor(build bool) error {
 	if failed > 0 {
 		return fmt.Errorf("%d of %d checks failed", failed, len(checks))
 	}
+	if err := requireBootableHost(); err != nil {
+		fmt.Printf("\nAll checks passed, but %v.\n", err)
+		return nil
+	}
 	fmt.Println("\nAll checks passed. `sprout up` should work in a flake with a sprout.vms definition.")
 	return nil
 }
@@ -62,13 +66,7 @@ type doctorCheck struct {
 }
 
 func checkPlatform() (string, error) {
-	if runtime.GOOS != "darwin" {
-		return "", fmt.Errorf("sprout boots VMs through Virtualization.framework and only runs on macOS (this is %s)", runtime.GOOS)
-	}
-	if runtime.GOARCH != "arm64" {
-		return "", fmt.Errorf("sprout builds aarch64-linux guests and only runs on Apple Silicon (this Mac is %s)", runtime.GOARCH)
-	}
-	return fmt.Sprintf("macOS %s", runtime.GOARCH), nil
+	return hostNixSystem()
 }
 
 func checkNix() (string, error) {
@@ -99,10 +97,18 @@ func checkFlakes() (string, error) {
 // and immediate. `doctor --build` does the end-to-end proof.
 func checkLinuxBuilder() (string, error) {
 	system := guestNixSystem()
+	if runtime.GOOS == "linux" {
+		if jobs, err := nixConfigShow("max-jobs"); err != nil || jobs != "0" {
+			return fmt.Sprintf("native local build (same-architecture %s guest needs no remote builder)", system), nil
+		}
+	}
 	if builders, err := nixConfigShow("builders"); err == nil {
 		if b := strings.TrimSpace(builders); b != "" && hasBuilderEntries(b) {
 			return fmt.Sprintf("builders = %s", summarize(b)), nil
 		}
+	}
+	if runtime.GOOS == "linux" {
+		return "", fmt.Errorf("max-jobs = 0 disables local builds and no builders are configured — raise max-jobs in nix.conf or configure a builder for %s", system)
 	}
 	if platforms, err := nixConfigShow("extra-platforms"); err == nil {
 		if slices.Contains(strings.Fields(platforms), system) {
@@ -139,6 +145,9 @@ func hasBuilderEntries(builders string) bool {
 }
 
 func checkVirtualization() (string, error) {
+	if runtime.GOOS == "linux" {
+		return checkKVM("/dev/kvm")
+	}
 	out, err := exec.Command("sysctl", "-n", "kern.hv_support").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "1" {
 		return "", fmt.Errorf("Virtualization.framework not supported (kern.hv_support != 1) — sprout needs Apple Silicon hardware virtualization; VMs cannot boot on this machine")
