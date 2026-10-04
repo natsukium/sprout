@@ -81,3 +81,8 @@ $ sprout forward --bind 0.0.0.0 80
 
 This is reachable from the network, not just the host. Prefer an unprivileged
 loopback port for an ordinary development server.
+
+Linux exempts no address, so `--bind 0.0.0.0` does not reach a privileged port
+there: forward through an unprivileged host port (`8080:80`), or lower
+`net.ipv4.ip_unprivileged_port_start`, which lets every local user bind from
+that port up.

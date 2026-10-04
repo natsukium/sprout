@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,11 +185,7 @@ func closeAll(lns []net.Listener) {
 func routeListen(bindHost string, port int, domain string) ([]net.Listener, error) {
 	lns, err := bindListeners(bindHost, port)
 	if errors.Is(err, errPrivilegedBind) {
-		return nil, fmt.Errorf("cannot bind %s:%d: macOS forbids a non-root bind on a privileged port (<1024) against a specific address. Choose one:\n"+
-			"  • an unprivileged port:  sprout route serve --port 8080     (URLs then carry it: http://<name>.%s:8080/)\n"+
-			"  • all interfaces:        sprout route serve --bind 0.0.0.0  (allowed without root, but reachable from your LAN — every instance's every port, by Host header)\n"+
-			"  • a launchd daemon that binds :%d for you (services.sprout.route, see docs/how-to/route.md)",
-			bindHost, port, domain, port)
+		return nil, routePrivilegedBindError(runtime.GOOS, bindHost, port, domain)
 	}
 	if errors.Is(err, syscall.EADDRINUSE) {
 		switch probeRouter(probeAddr(bindHost), port, domain) {

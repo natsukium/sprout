@@ -258,6 +258,11 @@ unprivileged port or the launchd module.
 Without it the router binds `localhost`, which is both `127.0.0.1` and `::1` on
 the one port, since a browser may resolve `localhost` to either.
 
+Linux refuses a non-root bind below `net.ipv4.ip_unprivileged_port_start`
+(1024 by default) on every address, `0.0.0.0` included, so there the choices
+are an unprivileged port or lowering that sysctl, which lets every local user
+bind from that port up.
+
 ## Always-on port 80, without root
 
 The nix-darwin module has launchd bind the port as root and hand the socket to
