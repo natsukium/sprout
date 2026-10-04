@@ -29,9 +29,9 @@ jobs:
           server-url: https://niks3.natsukium.com
       - run: nix flake check --print-build-logs
       # `nix flake check` skips sproutConfigurations as an unknown flake
-      # output, so forcing the drvPath is what covers nix/bundle.nix here.
+      # output, so instantiating the bundles is what covers nix/bundle.nix here.
       # See dev/check-examples.sh for the same check over the examples.
-      - run: nix eval --raw .#sproutConfigurations.dev.drvPath
+      - run: nix path-info --derivation .#sproutConfigurations.{aarch64-darwin,aarch64-linux,x86_64-linux}.dev
       - run: ./dev/check-examples.sh
       - run: nix develop -c go vet ./...
       # -race because the network stack and the idle watcher are concurrent.
@@ -74,4 +74,4 @@ jobs:
       # bundle is a two-file runCommand whose substitution value is nil (users
       # build their own project's bundle, not an example's), while this closure
       # is the base system every guest shares.
-      - run: nix build ./examples/${{ matrix.example }}#nixosConfigurations.sprout-${{ matrix.vm }}.config.system.build.toplevel --print-build-logs
+      - run: nix build ./examples/${{ matrix.example }}#nixosConfigurations.sprout-aarch64-darwin-${{ matrix.vm }}.config.system.build.toplevel --print-build-logs

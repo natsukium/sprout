@@ -14,9 +14,9 @@ for example in minimal podman k3s; do
     # `nix flake check` skips sproutConfigurations as an unknown flake output,
     # leaving the manifest and runner plumbing in nix/bundle.nix unevaluated.
     # Forcing the drvPath evaluates the whole guest system without realising
-    # its aarch64-linux closure, so this stays a host-side check.
+    # its closure, so this stays a host-side check.
     nix eval --raw --apply \
-      'cfgs: builtins.concatStringsSep "\n" (map (c: c.drvPath) (builtins.attrValues cfgs))' \
+      'cfgs: builtins.concatStringsSep "\n" (builtins.concatMap (s: map (c: c.drvPath) (builtins.attrValues s)) (builtins.attrValues cfgs))' \
       '.#sproutConfigurations'
     echo
   )

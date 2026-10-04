@@ -30,15 +30,20 @@ func TestAwaitBootOrReadyReportsChildFailure(t *testing.T) {
 // runner exit), which the parent's view of the exit status cannot.
 func TestAwaitBootOrReadyQuotesTheChildsLastLogLine(t *testing.T) {
 	shortStateRoot(t)
+	host, err := hostNixSystem()
+	if err != nil {
+		t.Fatalf("test host has no bundle system: %v", err)
+	}
+	attr := ".#sproutConfigurations." + host + ".dev"
 	logPath := filepath.Join(t.TempDir(), "up.log")
-	log := "building .#sproutConfigurations.dev …\n" +
+	log := "building " + attr + " …\n" +
 		"error: syntax error, unexpected ')'\n" +
-		"sprout: nix build .#sproutConfigurations.dev: exit status 1\n"
+		"sprout: nix build " + attr + ": exit status 1\n"
 	if err := os.WriteFile(logPath, []byte(log), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := awaitBootOrReady(func() error { return errors.New("exit status 1") }, "dddd00000005", 0, logPath, "up")
-	if err == nil || !strings.Contains(err.Error(), "\n  nix build .#sproutConfigurations.dev: exit status 1") {
+	err = awaitBootOrReady(func() error { return errors.New("exit status 1") }, "dddd00000005", 0, logPath, "up")
+	if err == nil || !strings.Contains(err.Error(), "\n  nix build "+attr+": exit status 1") {
 		t.Fatalf("want the log's last line quoted without the sprout: prefix, got %v", err)
 	}
 }

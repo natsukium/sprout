@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -45,15 +46,53 @@ func localFlakeUntracked() bool {
 	return tracked.Run() != nil
 }
 
+func hostNixSystem() (string, error) {
+	return hostNixSystemFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func hostNixSystemFor(goos, goarch string) (string, error) {
+	switch goos {
+	case "darwin":
+		if goarch == "arm64" {
+			return "aarch64-darwin", nil
+		}
+	case "linux":
+		switch goarch {
+		case "arm64":
+			return "aarch64-linux", nil
+		case "amd64":
+			return "x86_64-linux", nil
+		}
+	}
+	return "", fmt.Errorf("sprout runs on aarch64-darwin, aarch64-linux, and x86_64-linux hosts (this is %s/%s); anything else is out of scope", goos, goarch)
+}
+
 func listDefinitions(flakeRef string) ([]string, error) {
-	attr := fmt.Sprintf("%s#sproutConfigurations", flakeRef)
+	systems, err := evalFlakeAttrNames(fmt.Sprintf("%s#sproutConfigurations", flakeRef), flakeRef)
+	if err != nil || systems == nil {
+		// A flake without the output has no VMs, which pickDefinition
+		// explains; it is not a broken flake.
+		return systems, err
+	}
+	host, err := hostNixSystem()
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(systems, host) {
+		return nil, fmt.Errorf("%s defines VMs but not for %s (it targets %s); add %q to systems", flakeRef, host, strings.Join(systems, ", "), host)
+	}
+	return evalFlakeAttrNames(fmt.Sprintf("%s#sproutConfigurations.%s", flakeRef, host), flakeRef)
+}
+
+// A missing output reads as an empty definition set; anything else —
+// including a missing system slice under an output that exists — is a real
+// evaluation failure the user must see.
+func evalFlakeAttrNames(attr, flakeRef string) ([]string, error) {
 	cmd := exec.Command("nix", "eval", "--json", attr, "--apply", "builtins.attrNames")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		// A flake without the output has no VMs, which pickDefinition
-		// explains; it is not a broken flake.
 		if missingOutput(stderr.String()) {
 			return nil, nil
 		}

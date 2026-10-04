@@ -89,6 +89,33 @@ func TestPickDefinitionExplainsAnEmptyFlake(t *testing.T) {
 	}
 }
 
+// Only the supported host systems map to a bundle slice.
+func TestHostNixSystemFor(t *testing.T) {
+	for _, c := range []struct {
+		goos, goarch string
+		want         string
+		wantOK       bool
+	}{
+		{"darwin", "arm64", "aarch64-darwin", true},
+		{"linux", "arm64", "aarch64-linux", true},
+		{"linux", "amd64", "x86_64-linux", true},
+		{"darwin", "amd64", "", false},
+		{"linux", "riscv64", "", false},
+		{"windows", "amd64", "", false},
+	} {
+		got, err := hostNixSystemFor(c.goos, c.goarch)
+		if c.wantOK {
+			if err != nil || got != c.want {
+				t.Errorf("hostNixSystemFor(%q, %q) = (%q, %v), want (%q, nil)", c.goos, c.goarch, got, err, c.want)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("hostNixSystemFor(%q, %q) = %q, want it rejected", c.goos, c.goarch, got)
+		}
+	}
+}
+
 // Both failure modes share nix's "does not provide attribute" wording, but a
 // missing sproutConfigurations output means "no VMs defined" while a missing
 // attribute deeper in the flake is a real error the user must see.
@@ -101,6 +128,7 @@ func TestMissingOutputDistinguishesNoVMsFromEvalErrors(t *testing.T) {
 	for name, stderr := range map[string]string{
 		"unrelated missing attribute": "error: flake 'git+file:///p' does not provide attribute 'devShells.aarch64-darwin.foo'",
 		"eval error inside a bundle":  "error: attribute 'nixpkgs' missing",
+		"flake targeting other hosts": "error: flake 'git+file:///p' does not provide attribute 'sproutConfigurations.x86_64-linux'",
 	} {
 		if missingOutput(stderr) {
 			t.Fatalf("%s misread as a flake with no VMs: %q", name, stderr)
