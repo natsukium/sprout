@@ -9,15 +9,15 @@ runtime.
 Evaluating `sprout.vms.<name>` produces two artifacts, not one:
 
 ```
-nix build .#sproutConfigurations.<name>
+nix build .#sproutConfigurations.<system>.<name>
 └── result/
     ├── runner          # microvm.nix vfkit runner, placeholders baked in
     └── manifest.json   # host-side actions for the binary to perform
 ```
 
 (The guest NixOS system behind the bundle is also exposed as
-`nixosConfigurations.sprout-<name>`, so stock tooling can introspect it:
-`nix eval .#nixosConfigurations.sprout-<name>.config.…`.)
+`nixosConfigurations.sprout-<system>-<name>`, so stock tooling can introspect it:
+`nix eval .#nixosConfigurations.sprout-<system>-<name>.config.…`.)
 
 The runner is an unmodified microvm.nix artifact with placeholder paths in
 its device arguments. The manifest lists which placeholder maps to which

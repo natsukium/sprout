@@ -63,6 +63,9 @@ lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
 }
 
 func cmdUp(selector, def, flakeRef, bundle string, foreground bool, expect string) error {
+	if err := requireBootableHost(); err != nil {
+		return err
+	}
 	definition := def
 	if bundle == "" {
 		var err error
@@ -301,9 +304,16 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 
 	bundle := bundlePath
 	if bundle == "" {
-		fmt.Printf("building %s#sproutConfigurations.%s …\n", flakeRef, def)
-		bundle, err = nixBuild(stagingBundleLink(tok.dir), flakeRef, def)
+		host, err := hostNixSystem()
 		if err != nil {
+			return err
+		}
+		fmt.Printf("building %s#sproutConfigurations.%s.%s …\n", flakeRef, host, def)
+		bundle, err = nixBuild(stagingBundleLink(tok.dir), flakeRef, host, def)
+		if err != nil {
+			if shapeErr := diagnoseOutputShape(flakeRef, host); shapeErr != nil {
+				return shapeErr
+			}
 			return err
 		}
 	} else {
@@ -601,8 +611,8 @@ func resolveInstanceSockets(sockDir string, m *Manifest) (instanceSockets, error
 // The out-link is the build's GC root, registered inside the same nix
 // invocation so there is no build-to-root window. Exactly one output path:
 // with several, the root would silently not cover what gets booted.
-func nixBuild(outLink, flakeRef, def string) (string, error) {
-	attr := fmt.Sprintf("%s#sproutConfigurations.%s", flakeRef, def)
+func nixBuild(outLink, flakeRef, host, def string) (string, error) {
+	attr := fmt.Sprintf("%s#sproutConfigurations.%s.%s", flakeRef, host, def)
 	cmd := exec.Command("nix", "build", "--out-link", outLink, "--print-out-paths", attr)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()

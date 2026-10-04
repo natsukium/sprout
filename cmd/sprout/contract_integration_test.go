@@ -17,7 +17,14 @@ import (
 // it names is present in the runner, so drift in either direction fails here
 // instead of at a user's `sprout up`.
 func TestManifestRunnerContract(t *testing.T) {
-	bundle, err := nixBuild(filepath.Join(t.TempDir(), "bundle"), ".", "dev")
+	host, err := hostNixSystem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "aarch64-darwin" {
+		t.Skipf("vfkit runner contract needs a vfkit host (this is %s)", host)
+	}
+	bundle, err := nixBuild(filepath.Join(t.TempDir(), "bundle"), ".", host, "dev")
 	if err != nil {
 		t.Fatalf("nix build: %v", err)
 	}

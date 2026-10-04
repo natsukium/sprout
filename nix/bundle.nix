@@ -3,6 +3,7 @@
 # microvm.nix runner, unmodified from upstream, serves any number of instances.
 { localInputs, lib }:
 let
+  systems = import ./systems.nix;
   parseSize =
     v:
     if builtins.isInt v then
@@ -46,11 +47,6 @@ let
 
   dataMount = "/run/sprout";
 
-  # sprout ships an Apple Silicon host runner and an aarch64 Linux guest; kept
-  # internal rather than exposed as an option that would accept values the
-  # vfkit runner cannot boot.
-  guestSystem = "aarch64-linux";
-
   # vfkit's REST control socket. The bare name goes to the manifest, which the
   # host joins onto the short socket dir; the runner gets the absolute
   # placeholder, because microvm.nix prefixes a relative socket with the
@@ -70,6 +66,11 @@ let
   vmParts =
     hostPkgs: name: vmCfg:
     let
+      # Derived from the host rather than exposed as options, which would
+      # accept combinations the runners cannot boot.
+      guestSystem = systems.guestFor hostPkgs.stdenv.hostPlatform.system;
+      hypervisor = systems.hypervisorFor hostPkgs.stdenv.hostPlatform.system;
+      isVfkit = hypervisor == "vfkit";
       # Which fields a credential needs depends on its strategy, so entry.nix
       # cannot mark any of them mandatory; checked here instead.
       credentials = lib.mapAttrs (
@@ -137,14 +138,14 @@ let
           {
             networking.hostName = lib.mkDefault "sprout-${name}";
             microvm = {
-              hypervisor = "vfkit";
+              inherit hypervisor;
               inherit (vmCfg) vcpu;
               mem = parseSize vmCfg.mem;
               vmHostPackages = hostPkgs;
               socket = placeholders.restSocket;
               # vfkit logs the allocated PTY path at info level; `sprout`
               # parses it from the runner output to attach the console.
-              vfkit.logLevel = "info";
+              vfkit.logLevel = lib.mkIf isVfkit "info";
 
               # The store comes in via virtiofs instead of an erofs image:
               # no image rebuild on every guest change.
@@ -200,7 +201,7 @@ let
               # deterministic leases, in-process dialing (`sprout shell`
               # without host ports) and dynamic port forwarding.
               interfaces = [ ];
-              vfkit.extraArgs = [
+              vfkit.extraArgs = lib.mkIf isVfkit [
                 "--device"
                 "virtio-net,unixSocketPath=${placeholders.netSocket},mac=${guest.mac}"
               ];
@@ -268,7 +269,7 @@ let
         ]
         ++ credMounts.substitutions
         ++ cacheMounts.substitutions
-        ++ [
+        ++ lib.optionals isVfkit [
           {
             # vfkit's stdio console is unavailable on macOS 26, so attach
             # through its supported PTY console instead.

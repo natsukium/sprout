@@ -22,6 +22,9 @@ func newStartCmd() *cobra.Command {
 	selector := addInstanceFlag(cmd)
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run the daemon in this process instead of returning once the VM is ready (for a supervisor)")
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		if err := requireBootableHost(); err != nil {
+			return err
+		}
 		if !foreground {
 			return startDetached(*selector)
 		}

@@ -35,7 +35,8 @@ let
         ];
       }).config;
 
-  # Match the flake-parts output shape so discovery has one contract.
+  # Callers nest the result under sproutConfigurations.<system>, the shape
+  # discovery reads.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
   # What the sprout binary shells out to (git, ssh, and `nix build` for GC

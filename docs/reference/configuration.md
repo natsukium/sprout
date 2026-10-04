@@ -65,35 +65,39 @@ lands at `/run/sprout-git`; without git, inspect its host-path symlinks with
 
 `sprout.vms.<name>` is a flake-parts module, but adopting sprout must not mean
 restructuring a flake that does not use flake-parts. `lib.mkVMs` takes the
-same options and returns the `sproutConfigurations` attrset directly:
+same options and returns one host's slice of the `sproutConfigurations`
+attrset, which you nest under that host's system:
 
 ```nix
 {
   inputs.sprout.url = "github:natsukium/sprout";
 
   outputs = { self, sprout }: {
-    sproutConfigurations = sprout.lib.mkVMs {
-      pkgs = sprout.inputs.nixpkgs.legacyPackages.aarch64-darwin;
-      vms.dev = {
-        vcpu = 2;
-        mem = "2GiB";
-        modules = [ ./guest.nix ];
-      };
-    };
+    sproutConfigurations = sprout.inputs.nixpkgs.lib.genAttrs
+      [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ]
+      (system: sprout.lib.mkVMs {
+        pkgs = sprout.inputs.nixpkgs.legacyPackages.${system};
+        vms.dev = {
+          vcpu = 2;
+          mem = "2GiB";
+          modules = [ ./guest.nix ];
+        };
+      });
   };
 }
 ```
 
-`pkgs` is the **host** (`aarch64-darwin`) package set: the runner is a host
-artifact, while the guest closure is built from sprout's own pinned nixpkgs. The result
-is byte-for-byte the bundle the flake-parts module produces for the same
-options, so every command, option, and guest feature behaves identically.
+`pkgs` is the **host** package set: the runner is a host artifact, and the
+host's system selects the guest system and hypervisor, while the guest closure
+is built from sprout's own pinned nixpkgs. The result is byte-for-byte the
+bundle the flake-parts module produces for the same options, so every command,
+option, and guest feature behaves identically.
 
-`sprout` discovers definitions by the attr names of the `sproutConfigurations`
-flake output, a dedicated output rather than `packages` so dev VMs never
-clutter `nix flake show` or a project's real package set. `lib.mkVM` returns
-a single bundle (taking `name` and the VM options inline) if you need to
-assemble that attrset yourself.
+`sprout` discovers definitions by the attr names of
+`sproutConfigurations.<system>` for the host it runs on, a dedicated output
+rather than `packages` so dev VMs never clutter `nix flake show` or a
+project's real package set. `lib.mkVM` returns a single bundle (taking `name`
+and the VM options inline) if you need to assemble that attrset yourself.
 
 ## Readiness
 
