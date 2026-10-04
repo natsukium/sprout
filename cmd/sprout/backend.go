@@ -52,7 +52,10 @@ type controlProtocol interface {
 }
 
 type consoleMode interface {
-	writer(consoleLog string) io.Writer
+	writer(consoleLog string) (io.WriteCloser, error)
+	// Whether console.log carries the runner's whole output, which makes
+	// runner.log a duplicate not worth showing.
+	mirrorsRunnerLog() bool
 }
 
 // A nil entry is a value the schema defines but this sprout cannot run yet:
@@ -64,11 +67,11 @@ var (
 	}
 	controlProtocols = map[string]controlProtocol{
 		"vfkit-rest": vfkitREST{},
-		"qmp":        nil,
+		"qmp":        qmpControl{},
 	}
 	consoleModes = map[string]consoleMode{
 		"pty-announce": ptyAnnounce{},
-		"stdio":        nil,
+		"stdio":        stdioConsole{},
 	}
 )
 
@@ -132,7 +135,7 @@ var backendKinds = []*backendKind{
 				deviceSocketArg("virtio-net", "unixSocketPath", socketIn(instDir)),
 			}
 		},
-		failureHint: translateRunnerFailure,
+		failureHint: vfkitRunnerFailureHint,
 	},
 	{
 		name:       "qemu",
@@ -141,6 +144,7 @@ var backendKinds = []*backendKind{
 		runnerArgs: func(sockDir, _ string) []argMatcher {
 			return []argMatcher{deviceSocketArg("stream", "addr.path", socketIn(sockDir))}
 		},
+		failureHint: qemuRunnerFailureHint,
 	},
 }
 

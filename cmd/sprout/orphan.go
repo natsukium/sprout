@@ -1,7 +1,8 @@
 package main
 
-// macOS has no PDEATHSIG, so a crashed daemon leaves its vfkit child running,
-// still holding var.img with no control socket to reach it by.
+// macOS has no PDEATHSIG, and on Linux a runner may ignore the signal it
+// delivers, so a crashed daemon can leave its runner running, still holding
+// var.img with no control socket to reach it by.
 
 import (
 	"errors"
@@ -21,7 +22,7 @@ const instanceLockWait = 15 * time.Second
 
 // Held for as long as the daemon runs. The kernel drops a flock on process
 // death however abrupt, so holding it proves no other daemon is alive here,
-// and therefore that a matching vfkit belongs to a dead one.
+// and therefore that a matching runner belongs to a dead one.
 func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
 	return lockInstance(dir, wait, nil)
 }
@@ -104,7 +105,8 @@ func reapOrphans(dir string, socks instanceSockets, m *Manifest) error {
 	if len(pids) == 0 {
 		return nil
 	}
-	fmt.Fprintf(os.Stderr, "reclaiming VM process %s left by a previous daemon …\n", formatPIDs(pids))
+	kind := m.contract.kind.name
+	fmt.Fprintf(os.Stderr, "reclaiming %s VM process %s left by a previous daemon …\n", kind, formatPIDs(pids))
 
 	// gracefulStop's ladder, with shorter waits: a user is watching a boot and
 	// the VM being drained is already unreachable.
@@ -123,7 +125,7 @@ func reapOrphans(dir string, socks instanceSockets, m *Manifest) error {
 	if waitProcsGone(pids, 5*time.Second) {
 		return nil
 	}
-	return fmt.Errorf("leftover VM process %s would not exit; it still holds this instance's disk image, so kill it manually and retry", formatPIDs(alivePIDs(pids)))
+	return fmt.Errorf("leftover %s VM process %s would not exit; it still holds this instance's disk image, so kill it manually and retry", kind, formatPIDs(alivePIDs(pids)))
 }
 
 func signalProcs(pids []int, sig syscall.Signal) {
@@ -156,17 +158,6 @@ func formatPIDs(pids []int) string {
 		s[i] = strconv.Itoa(pid)
 	}
 	return strings.Join(s, ", ")
-}
-
-// The framework's "storage device attachment is invalid" gives no hint that
-// another process holds var.img, and reaching this message means reapOrphans
-// found nothing, so the holder is unrecognized.
-func translateRunnerFailure(runnerOutput, dir string) string {
-	if strings.Contains(runnerOutput, "VZErrorDomain") && strings.Contains(runnerOutput, "storage device attachment is invalid") {
-		img := varImagePath(dir)
-		return fmt.Sprintf("hint: another process still has %s open, which is what the framework is refusing; find it with `lsof %s`, stop it, and retry", img, img)
-	}
-	return ""
 }
 
 func runnerLogTail(path string, n int64) string {

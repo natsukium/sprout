@@ -93,9 +93,9 @@ func TestGracefulStopWalksTheWholeLadder(t *testing.T) {
 	t.Cleanup(func() { srv.Close() })
 
 	// The ladder's order is what matters here, not the production grace periods.
-	origRest, origTerm := restStopWait, sigtermWait
-	restStopWait, sigtermWait = 200*time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { restStopWait, sigtermWait = origRest, origTerm })
+	origRest, origTerm := controlStopWait, sigtermWait
+	controlStopWait, sigtermWait = 200*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { controlStopWait, sigtermWait = origRest, origTerm })
 
 	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
 

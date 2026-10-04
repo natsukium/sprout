@@ -32,12 +32,12 @@ func newLogsCmd() *cobra.Command {
 func cmdLogs(selector string, follow bool, lines int) error {
 	// resolveAndLoad, not bare identity resolution: an absent instance must
 	// fail like `exec` does, not exit 0 with nothing printed.
-	id, _, dir, err := resolveAndLoad(selector)
+	id, inst, dir, err := resolveAndLoad(selector)
 	if err != nil {
 		return err
 	}
 	printed := false
-	for _, log := range []string{"runner.log", "console.log"} {
+	for _, log := range logsToShow(inst.Platform.Backend) {
 		path := filepath.Join(dir, log)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -94,4 +94,16 @@ func followLog(path string) error {
 		f.Close()
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// Keyed on the recorded backend rather than the bundle's manifest, which
+// `logs` has no reason to load; a kind's console mode is fixed by its Nix
+// backend module.
+func logsToShow(backend string) []string {
+	if k := lookupBackendKind(backend); k != nil {
+		if mode := consoleModes[k.vocabulary.console]; mode != nil && mode.mirrorsRunnerLog() {
+			return []string{"console.log"}
+		}
+	}
+	return []string{"runner.log", "console.log"}
 }

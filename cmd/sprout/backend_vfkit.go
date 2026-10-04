@@ -70,9 +70,11 @@ func vfkitRestState(sock, state string) error {
 
 type ptyAnnounce struct{}
 
-func (ptyAnnounce) writer(consoleLog string) io.Writer {
-	return &ptyWatcher{consoleLog: consoleLog}
+func (ptyAnnounce) writer(consoleLog string) (io.WriteCloser, error) {
+	return &ptyWatcher{consoleLog: consoleLog}, nil
 }
+
+func (ptyAnnounce) mirrorsRunnerLog() bool { return false }
 
 var ptyPattern = regexp.MustCompile(`/dev/ttys[0-9]+`)
 
@@ -102,6 +104,9 @@ func (w *ptyWatcher) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// The attached PTY is not the runner's output stream and closes itself.
+func (w *ptyWatcher) Close() error { return nil }
+
 func (w *ptyWatcher) attach(path string) {
 	pty, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -119,4 +124,15 @@ func (w *ptyWatcher) attach(path string) {
 		defer logf.Close()
 		io.Copy(logf, pty) //nolint:errcheck
 	}()
+}
+
+// The framework's "storage device attachment is invalid" gives no hint that
+// another process holds var.img, and reaching this message means reapOrphans
+// found nothing, so the holder is unrecognized.
+func vfkitRunnerFailureHint(runnerOutput, dir string) string {
+	if strings.Contains(runnerOutput, "VZErrorDomain") && strings.Contains(runnerOutput, "storage device attachment is invalid") {
+		img := varImagePath(dir)
+		return fmt.Sprintf("hint: another process still has %s open, which is what the framework is refusing; find it with `lsof %s`, stop it, and retry", img, img)
+	}
+	return ""
 }

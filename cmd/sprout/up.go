@@ -190,10 +190,12 @@ func launchDetached(id *Identity, selector string, childArgs []string, action, w
 }
 
 // The child runs in its own process group so a Ctrl-C aimed at the foreground
-// command never reaches a daemon meant to outlive it. It also starts without
+// command never reaches a daemon meant to outlive it, and neither does the
+// SIGHUP of the terminal closing: a hangup signals only the session leader
+// and the foreground group, so no new session is needed. It also starts without
 // the caller's descriptors: a caller that serializes boots with `flock 9> lock`
 // around `sprout up` would otherwise never get the lock back, since the lock
-// belongs to the open file description the daemon and vfkit inherited.
+// belongs to the open file description the daemon and its runner inherited.
 func backgroundSelf(args []string, logf *os.File) (*exec.Cmd, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -642,6 +644,24 @@ func resolveInstanceSockets(sockDir string, m *Manifest) (instanceSockets, error
 	return s, nil
 }
 
+// The sockets the runner and its sidecars bind, as opposed to the daemon's
+// own and the network socket its transport serves. A runner that died
+// unclean leaves its files behind, where a stale one would pass for a live
+// endpoint.
+func (s instanceSockets) runnerOwned(m *Manifest) []string {
+	paths := []string{s.vmControl}
+	for _, sc := range m.contract.sidecars {
+		paths = append(paths, s.named[sc.Ready.Socket])
+	}
+	return paths
+}
+
+func removeSocketFiles(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+}
+
 // The out-link is the build's GC root, registered inside the same nix
 // invocation so there is no build-to-root window. Exactly one output path:
 // with several, the root would silently not cover what gets booted.
@@ -738,19 +758,28 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	}
 	defer runnerLog.Close()
 
-	console := m.contract.console.writer(consoleLogPath(dir))
+	console, err := m.contract.console.writer(consoleLogPath(dir))
+	if err != nil {
+		return err
+	}
+	defer console.Close()
 	output := io.MultiWriter(runnerLog, console)
+
+	kind := m.contract.kind.name
+	runtimeSocks := socks.runnerOwned(m)
+	removeSocketFiles(runtimeSocks)
+	defer removeSocketFiles(runtimeSocks)
 
 	cmd := exec.Command(runScript)
 	cmd.Dir = dir
 	cmd.Stdout = output
 	cmd.Stderr = output
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("runner start: %w", err)
+	exit, err := startManaged(cmd)
+	if err != nil {
+		return fmt.Errorf("%s runner start: %w", kind, err)
 	}
-	fmt.Printf("instance %q booting (runner pid %d) …\n", inst.Name, cmd.Process.Pid)
+	fmt.Printf("instance %q booting (%s runner pid %d) …\n", inst.Name, kind, cmd.Process.Pid)
 
-	exit := watchRunner(cmd)
 	ctl := m.contract.control
 
 	var stopRequested atomic.Bool
@@ -763,7 +792,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), runnerPID: cmd.Process.Pid}
 	if err := serveControl(ctx, socks.control, srv); err != nil {
 		// The runner is already up; returning without stopping it would strand
-		// a vfkit holding var.img with no control socket, invisible to every
+		// a runner holding var.img with no control socket, invisible to every
 		// probe until the next boot's orphan reaper finds it.
 		gracefulStop(ctl, socks.vmControl, cmd, exit)
 		return err
@@ -788,27 +817,27 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	}
 	err = exit.err
 
-	// Normal shutdowns (vfkit REST stop, guest poweroff) also exit non-zero,
-	// so only unexpected failures are reported.
+	// Normal shutdowns (a control-socket stop, guest poweroff) also exit
+	// non-zero, so only unexpected failures are reported.
 	if err != nil {
 		// Dying before SSH ever answered is a failed boot, and must exit
 		// non-zero: a detached `up` reads a clean exit as a handoff to a
 		// running daemon. After readiness, a late exit is just a report — a
 		// guest that powered itself off is not a failure.
 		if !srv.ready.Load() && !stopRequested.Load() {
-			msg := fmt.Sprintf("runner exited before the VM became reachable: %v (see %s)", err, logPath)
+			msg := fmt.Sprintf("%s runner exited before the VM became reachable: %v (see %s)", kind, err, logPath)
 			if hint := m.contract.runnerFailureHint(runnerLogTail(logPath, runnerLogTailBytes), dir); hint != "" {
 				msg += "\n" + hint
 			}
 			return errors.New(msg)
 		}
-		fmt.Fprintf(os.Stderr, "runner exited: %v (see %s)\n", err, logPath)
+		fmt.Fprintf(os.Stderr, "%s runner exited: %v (see %s)\n", kind, err, logPath)
 	}
 	fmt.Printf("instance %q stopped\n", inst.Name)
 	return nil
 }
 
-// vfkit reports its errors on the last few lines; everything before them is
+// Runners report their errors on the last few lines; everything before them is
 // boot chatter.
 const runnerLogTailBytes = 8 << 10
 
@@ -861,24 +890,25 @@ type dialer interface {
 	DialContextTCP(ctx context.Context, addr string) (net.Conn, error)
 }
 
-// Generous on purpose: killing too early orphans the Virtualization.framework
-// XPC helper before it tears down.
+// Generous on purpose: killing vfkit too early orphans the
+// Virtualization.framework XPC helper before it tears down.
 var (
-	restStopWait = 30 * time.Second
-	sigtermWait  = 15 * time.Second
+	controlStopWait = 30 * time.Second
+	sigtermWait     = 15 * time.Second
 )
 
 // sock must be sun_path-safe (see socketdir.go): the runner bound the same
 // file relative to the instance directory.
 func gracefulStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {
-	if err := ctl.requestStop(sock, false); err == nil && exit.within(restStopWait) {
+	if err := ctl.requestStop(sock, false); err == nil && exit.within(controlStopWait) {
 		return
 	}
 	killRunner(cmd, exit)
 }
 
-// The guest gets no shutdown, but the power cut goes through
-// Virtualization.framework, so vfkit still exits on its own.
+// The guest gets no shutdown, but the backend cuts the power itself
+// (Virtualization.framework for vfkit, quit for QEMU), so the runner still
+// exits on its own.
 var hardStopWait = 5 * time.Second
 
 func hardStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {

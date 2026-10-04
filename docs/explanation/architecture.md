@@ -94,9 +94,11 @@ SSH uses no host port at all. `sprout shell` reaches the guest through the
 in-process network stack with `ProxyCommand sprout dial-stdio`, the same
 pattern as `docker system dial-stdio`. Nothing is allocated on the host, so
 nothing collides and nothing has to persist across boots. The graceful-stop
-sequence (vfkit REST stop, then SIGTERM, then SIGKILL, with waits for the
-Virtualization.framework XPC teardown) lives in one tested place, because
-killing too early orphans the XPC helper.
+sequence (a stop request over the backend's control socket, vfkit's REST API
+or QEMU's QMP `system_powerdown`, then SIGTERM, then SIGKILL, with waits for
+the Virtualization.framework XPC teardown) lives in one tested place, because
+killing vfkit too early orphans the XPC helper. On Linux the runner also gets
+`PDEATHSIG`, so QEMU exits with its daemon however the daemon dies.
 
 ## What the guest can reach
 

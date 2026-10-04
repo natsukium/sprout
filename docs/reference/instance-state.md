@@ -19,7 +19,7 @@
         ├── sock/vfkit-rest.sock      # backend control socket used by graceful stop (vm-control.sock, QMP, under QEMU)
         ├── daemon.lock               # held by the running daemon (see below)
         ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
-        ├── runner.log                # vfkit runner output (`sprout logs`)
+        ├── runner.log                # runner output (`sprout logs`; omitted there under QEMU, whose console.log is the same text)
         ├── console.log               # guest serial console (`sprout logs`)
         ├── data/ssh/                 # authorized_keys, projected at boot
         ├── data/instance.env         # identity env file; guest path /run/sprout/instance.env (see below)
@@ -32,7 +32,8 @@
 
 A daemon holds `daemon.lock` for its lifetime. The kernel releases the lock on
 any process exit, so a boot that acquires it can clean up a VM process left by
-a crashed daemon.
+a crashed daemon. On Linux the runner is started with `PDEATHSIG`, so a crashed
+daemon takes QEMU with it; the cleanup covers a runner that ignored it.
 
 Concurrent `up`/`start` calls converge on the lock rather than failing: a
 caller that finds it held waits for the holder to start serving control, then
