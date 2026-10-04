@@ -84,6 +84,12 @@ Embedding gvisor-tap-vsock avoids the socket-startup races, orphan cleanup,
 and `EADDRINUSE` retries of a separate gvproxy process. The daemon and network
 stack therefore share one lifetime and expose an in-process port-forward API.
 
+The runner's NIC reaches that stack through the backend's network socket,
+never a TAP device or host bridge: vfkit sends one Ethernet frame per Unix
+datagram, while QEMU's `-netdev stream` connects as a Unix stream client with
+length-prefixed frames. Both feed the same virtual switch, so the DHCP lease,
+forwards, wildcard DNS and the host-loopback alias behave the same on either.
+
 SSH uses no host port at all. `sprout shell` reaches the guest through the
 in-process network stack with `ProxyCommand sprout dial-stdio`, the same
 pattern as `docker system dial-stdio`. Nothing is allocated on the host, so

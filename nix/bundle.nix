@@ -195,7 +195,7 @@ let
               interfaces = [ ];
             };
           }
-          { inherit (backend) microvm; }
+          backend.module
           (import ./guest/credentials.nix {
             inherit guest dataMount;
             mountCreds = credsFor "mount";
@@ -271,7 +271,7 @@ in
       inherit (vmParts hostPkgs name vmCfg) nixos manifest;
       manifestFile = hostPkgs.writeText "sprout-manifest-${name}.json" (builtins.toJSON manifest);
     in
-    hostPkgs.runCommand "sprout-vm-${name}" { passthru = { inherit manifest; }; } ''
+    hostPkgs.runCommand "sprout-vm-${name}" { passthru = { inherit manifest nixos; }; } ''
       mkdir -p $out
       ln -s ${nixos.config.microvm.declaredRunner}/bin/microvm-run $out/runner
       cp ${manifestFile} $out/manifest.json

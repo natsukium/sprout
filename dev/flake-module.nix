@@ -150,6 +150,76 @@ in
         else
           throw "backend selection: ${builtins.toJSON failures}";
 
+      checks.qemu-backend =
+        let
+          hostPkgs = host: withSystem host ({ pkgs, ... }: pkgs);
+          vmOn = host: args: self.lib.mkVM ({ pkgs = hostPkgs host; } // args);
+          guestOn = host: args: (vmOn host args).nixos.config;
+          refusals =
+            cfg:
+            lib.filter (lib.hasPrefix "sprout:") (
+              map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions)
+            );
+          refusedFor = needle: cfg: builtins.any (lib.hasInfix needle) (refusals cfg);
+          withModule = host: module: guestOn host { modules = [ module ]; };
+          nic =
+            host:
+            let
+              m = (vmOn host { }).manifest;
+            in
+            {
+              args = (guestOn host { }).microvm.qemu.extraArgs;
+              netSubstituted = builtins.elem {
+                placeholder = "/sprout/placeholder/sock/${m.backend.network.socket}";
+                value = "socket:${m.backend.network.socket}";
+              } m.substitutions;
+            };
+          expectedNic = mac: {
+            args = [
+              "-netdev"
+              "stream,id=sprout0,server=off,addr.type=unix,addr.path=/sprout/placeholder/sock/net.sock"
+              "-device"
+              "virtio-net-pci,netdev=sprout0,mac=${mac},romfile="
+            ];
+            netSubstituted = true;
+          };
+          failures = lib.runTests {
+            testX86_64RunnerDialsTheNetSocketWithTheLeaseMac = {
+              expr = nic "x86_64-linux";
+              expected = expectedNic (vmOn "x86_64-linux" { }).manifest.guest.mac;
+            };
+            testAarch64RunnerDialsTheNetSocketWithTheLeaseMac = {
+              expr = nic "aarch64-linux";
+              expected = expectedNic (vmOn "aarch64-linux" { }).manifest.guest.mac;
+            };
+            testDefaultLinuxGuestsPassEveryQemuCheck = {
+              expr = map (host: refusals (guestOn host { })) [
+                "x86_64-linux"
+                "aarch64-linux"
+              ];
+              expected = [
+                [ ]
+                [ ]
+              ];
+            };
+            testQemuWithoutStreamNetdevIsRefused = {
+              expr = refusedFor "QEMU 7.2 or newer" (
+                withModule "x86_64-linux" (
+                  { pkgs, ... }:
+                  {
+                    microvm.qemu.package = lib.mkForce (pkgs.qemu_kvm // { version = "7.1.0"; });
+                  }
+                )
+              );
+              expected = true;
+            };
+          };
+        in
+        if failures == [ ] then
+          pkgs.runCommand "qemu-backend" { } "touch $out"
+        else
+          throw "qemu backend: ${builtins.toJSON failures}";
+
       devShells.default = pkgs.mkShell {
         packages = [
           pkgs.git-cliff
