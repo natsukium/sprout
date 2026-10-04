@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -293,6 +295,9 @@ func listenGuestSSH(t *testing.T, s *stack.Stack, banner string) {
 // loopback through the opt-in alias, and a socket credential bridged from a
 // host Unix socket.
 func TestNetworkPathsWorkOverEachTransport(t *testing.T) {
+	if inChildProcess(t) {
+		return
+	}
 	for _, c := range []struct {
 		name, host, kind string
 		dial             func(*testing.T, string) guestNIC
@@ -347,6 +352,9 @@ func TestNetworkPathsWorkOverEachTransport(t *testing.T) {
 // QEMU dials the socket once per process, so a runner restarted under the
 // same daemon must find the listener still accepting.
 func TestQemuStreamAcceptsARestartedRunner(t *testing.T) {
+	if inChildProcess(t) {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir := shortSocketDir(t)
@@ -416,6 +424,9 @@ func TestVfkitFramesQueuedDuringASessionOpenNoSecondSession(t *testing.T) {
 }
 
 func TestQemuStreamRemovesItsSocketOnShutdown(t *testing.T) {
+	if inChildProcess(t) {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sock := filepath.Join(shortSocketDir(t), "net.sock")
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
@@ -438,4 +449,22 @@ func TestQemuStreamRemovesItsSocketOnShutdown(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// Re-runs the calling test in a child process and reports whether the caller
+// is the parent, which should return. Every test that builds a VirtualNetwork
+// uses it: the type has no Close, and under -race the stacks left behind keep
+// every core busy for the rest of the package run, timing out unrelated tests.
+// The child takes them with it when it exits.
+func inChildProcess(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv("SPROUT_TEST_CHILD") == t.Name() {
+		return false
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.v")
+	cmd.Env = append(os.Environ(), "SPROUT_TEST_CHILD="+t.Name())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	return true
 }
