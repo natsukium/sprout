@@ -28,6 +28,13 @@ flake can name a cache scope or credential strategy the installed binary has
 no case for, which fails at `up` with the unknown value quoted rather than as
 a version mismatch. Upgrade the binary to match the flake input.
 
+Instances left running across an upgrade from 0.1.x stay reachable, so this
+release can stop them. A VM process that a crashed 0.1.x daemon left behind is not
+reclaimed automatically, because the socket path it was started with may
+since name another state root's instance; the next boot then fails naming the
+disk image the process still holds. Stop it (`lsof` on that path finds it)
+and boot again.
+
 The version is reported as `<version>-<revision>`, with the source revision
 always appended: no build claims the bare release number. `sprout version` is
 the authoritative value for the binary being executed.

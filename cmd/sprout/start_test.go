@@ -16,7 +16,7 @@ func TestStartForegroundNeverCreatesTheInstance(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)
 	const id = "startnostate"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 
 	err := startForeground(&Identity{ID: id, Name: "feature"})
 	if err == nil {
@@ -64,7 +64,7 @@ func TestStartRejectsMissingBundle(t *testing.T) {
 func TestStartForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "startbootrace"
-	t.Cleanup(func() { removeSocketDir(id) })
+	cleanupSocketDir(t, id)
 	dir := filepath.Join(root, "sprout", "instances", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

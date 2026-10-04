@@ -160,7 +160,7 @@ func seedInstanceWith(t *testing.T, root, id, name string, d *fakeDaemon) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	d.serve(t, filepath.Join(dir, "control.sock"))
+	d.serve(t, daemonControlSocket(t, dir))
 }
 
 // Under /tmp, not t.TempDir(): macOS caps unix socket paths near 104 bytes,
