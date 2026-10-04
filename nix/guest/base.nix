@@ -1,10 +1,16 @@
-{ guest, dataMount }:
+{
+  guest,
+  dataMount,
+  hostPlatform,
+}:
 { lib, pkgs, ... }:
 let
   guestGlobalEnv = {
     # A stable marker for "am I inside a sprout guest?" so project scripts can
     # gate behavior without inventing their own flag.
     SPROUT_GUEST = "1";
+  }
+  // lib.optionalAttrs hostPlatform.isDarwin {
     # The corrected xtables directory the unit below rebuilds; see its comment
     # for why the store's own copy is unusable here.
     XTABLES_LIBDIR = "/var/lib/xtables-fixed";
@@ -110,13 +116,13 @@ in
     fi
   '';
 
-  # The host /nix/store lives on case-insensitive APFS, so its virtiofs share
-  # carries Nix's case-hack names: libxt_mark.so (colliding with
+  # A Darwin host's /nix/store lives on case-insensitive APFS, so its virtiofs
+  # share carries Nix's case-hack names: libxt_mark.so (colliding with
   # libxt_MARK.so) is stored as libxt_mark.so~nix~case~hack~1, iptables cannot
   # find it, and every `-m mark` rule — hence all container networking —
   # fails. Rebuild a corrected xtables directory and point XTABLES_LIBDIR at
   # it for login sessions and every systemd unit alike.
-  systemd.services.fix-iptables-case-hack = {
+  systemd.services.fix-iptables-case-hack = lib.mkIf hostPlatform.isDarwin {
     description = "Restore case-hacked iptables extension filenames";
     wantedBy = [ "multi-user.target" ];
     before = [
