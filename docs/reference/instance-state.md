@@ -8,15 +8,15 @@
 └── instances/
     ├── .lifecycle-<id>               # lock file serializing create/claim/delete of the instance path
     └── <id>/
-        ├── instance.json             # version, repository, branch, definition, bundle path
+        ├── instance.json             # version, repository, branch, definition, bundle path, and the host, guest, and backend that created var.img
         ├── bundle                    # symlink to the recorded build; its Nix GC root (see below)
         ├── staging/<token>/          # transient per-`up` attempt: a lock file plus the build's staging GC root
         ├── var.img                   # persistent /var (sparse)
         ├── var.img.restoring         # transient staging file during `snapshot restore`
         ├── run.sh                    # per-instance runner (placeholders substituted)
         ├── control.sock              # daemon control socket (present while running)
-        ├── net.sock                  # vfkit datagram socket into the network stack
-        ├── vfkit-rest.sock           # vfkit REST endpoint, used by graceful stop
+        ├── net.sock                  # backend network socket into the embedded network stack
+        ├── vfkit-rest.sock           # backend control socket used by graceful stop (vm-control.sock, QMP, under QEMU)
         ├── daemon.lock               # held by the running daemon (see below)
         ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
         ├── runner.log                # vfkit runner output (`sprout logs`)
@@ -27,7 +27,7 @@
         ├── known_hosts               # per-instance host key trust
         └── snapshots/<name>/
             ├── var.img               # copy-on-write clone of /var
-            └── snapshot.json         # when it was taken, and against which build
+            └── snapshot.json         # when it was taken, against which build, and on which host, guest, and backend
 ```
 
 A daemon holds `daemon.lock` for its lifetime. The kernel releases the lock on
@@ -67,15 +67,36 @@ directory owned by the invoking user, so another user pre-creating the path
 cannot redirect where sockets are bound. If sprout reports the directory as
 someone else's, remove it and retry.
 
-`instance.json` is schema version 1. sprout rejects an instance record with an
-unsupported version before touching its runner or volume. There is no
-in-place migration in the 0.x.y line; keep a copy of important guest data
-before deleting a record and recreating it with `sprout up`.
-
 Shared and project build caches live under `~/.cache/sprout/` (or
 `$XDG_CACHE_HOME/sprout/`); they outlive any one instance and are not
 instance state. See the [caches
 reference](configuration.md#caches) for the per-scope layout.
+
+## Reusing a disk
+
+`instance.json` is schema version 2. Besides the build, it records the
+`hostSystem`, `guestSystem`, and `backend` that created `var.img`, and
+`snapshot.json` (also version 2) records the same three. A `/var` image is
+bound to them: its contents are built for one guest architecture, and its
+device naming and disk layout follow one backend. sprout therefore refuses,
+before touching the runner, the volume, or the record:
+
+- `up` or `start` with a bundle whose guest system, backend, or host system
+  differs from the instance's record (`sprout delete -i ID`, or use another
+  name). A refused `up` leaves a running VM running.
+- `up` or `start` on an instance that has a `var.img` but no readable record,
+  rather than adopting the disk under the new bundle.
+- `fork` from an instance whose record does not match its own build.
+- `snapshot restore` of a snapshot whose record is missing, unreadable, or
+  from a different host, guest, or backend; restore it into a matching
+  instance, or delete it. `snapshot list` still shows such snapshots.
+
+Records written before version 2 carry no platform. On `aarch64-darwin`, the
+only host that could write them, they are read as `aarch64-darwin` /
+`aarch64-linux` / `vfkit` (an instance record is rewritten as version 2 on its
+next write), so existing instances and snapshots keep working without a
+delete. Anywhere else they are refused with the delete remedy. An unsupported
+version is rejected before sprout touches the instance's runner or volume.
 
 ## Instance identity in the guest
 

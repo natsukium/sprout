@@ -114,3 +114,10 @@ func ensureSymlink(link, target string) error {
 func removeSocketDir(id string) {
 	_ = os.Remove(filepath.Join(socketDirBase(), id))
 }
+
+// The paths ensureSocketDir would yield, computed without creating anything,
+// so an over-long socket refuses a boot before it stops or rewrites anything.
+func checkInstanceSocketPaths(id string, m *Manifest) error {
+	_, err := resolveInstanceSockets(filepath.Join(socketDirBase(), id), m)
+	return err
+}

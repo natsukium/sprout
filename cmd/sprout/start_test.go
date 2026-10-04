@@ -76,7 +76,7 @@ func TestStartForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	}
 	writeHostManifest(t, bundle)
 	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
-		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1",
+		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1", Platform: hostPlatform(t),
 	}); err != nil {
 		t.Fatal(err)
 	}

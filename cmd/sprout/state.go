@@ -92,9 +92,12 @@ type Instance struct {
 	GuestIP          string `json:"guestIp"`
 	SSHUser          string `json:"sshUser"`
 	PID              int    `json:"pid"`
+	// Which host, guest, and backend created the disk; a boot under any
+	// other combination is refused rather than adopting it.
+	Platform
 }
 
-const instanceSchemaVersion = 1
+const instanceSchemaVersion = 2
 
 func xdgDir(envVar string, fallback ...string) (string, error) {
 	if dir := os.Getenv(envVar); dir != "" {
@@ -168,7 +171,15 @@ func loadInstance(id string) (*Instance, string, error) {
 	if err := json.Unmarshal(data, &inst); err != nil {
 		return nil, dir, err
 	}
-	if inst.Version != instanceSchemaVersion {
+	switch inst.Version {
+	case instanceSchemaVersion:
+	case 1:
+		// Migrated in memory and persisted by the next write. Elsewhere the
+		// platform stays unknown, which every reuse check refuses.
+		if p, ok := legacyPlatform(); ok {
+			inst.Platform, inst.Version = p, instanceSchemaVersion
+		}
+	default:
 		return nil, dir, fmt.Errorf("instance %q uses state version %d, but this sprout supports version %d; delete it and run `sprout up` again", id, inst.Version, instanceSchemaVersion)
 	}
 	return &inst, dir, nil

@@ -24,6 +24,10 @@ type Snapshot struct {
 	// fine, hence a warning rather than a refusal.
 	Definition string `json:"definition"`
 	Bundle     string `json:"bundle"`
+	// Absent from records written before restore checked it; see
+	// loadSnapshotRecord.
+	Version int `json:"version,omitempty"`
+	Platform
 }
 
 func validateSnapshotName(name string) error {
@@ -255,6 +259,8 @@ func cmdSnapshotCreate(selector string, live bool, snapName string) error {
 		Live:       running,
 		Definition: inst.Definition,
 		Bundle:     inst.Bundle,
+		Version:    snapshotSchemaVersion,
+		Platform:   inst.Platform,
 	}
 	cow, err := seedVolumeDir(target, img, running, snapshotRecordPath(target), &snap)
 	if err != nil {
@@ -419,16 +425,20 @@ func cmdSnapshotRestore(selector string, force bool, snapName string) error {
 	if err := requireSnapshot(src, id, snapName); err != nil {
 		return err
 	}
+	snap, err := loadSnapshotRecord(dir, snapName)
+	if err != nil {
+		return unrestorableSnapshotError(id.Display(), snapName, err)
+	}
+	if err := checkSnapshotPlatform(id.Display(), snapName, inst.Platform, snap); err != nil {
+		return err
+	}
 
 	if !force && !confirmYes(fmt.Sprintf("replace instance %q's current /var with snapshot %q? the current /var is discarded", id.Display(), snapName)) {
 		return errAborted
 	}
 
-	snaps, _ := listSnapshots(dir)
-	for _, s := range snaps {
-		if s.Name == snapName && s.Bundle != "" && s.Bundle != inst.Bundle {
-			fmt.Fprintf(os.Stderr, "warning: snapshot %q was taken against a different build (%s); /etc comes from the current build on the next boot, so guest state written by the old system may not match it\n", snapName, s.Bundle)
-		}
+	if snap.Bundle != "" && snap.Bundle != inst.Bundle {
+		fmt.Fprintf(os.Stderr, "warning: snapshot %q was taken against a different build (%s); /etc comes from the current build on the next boot, so guest state written by the old system may not match it\n", snapName, snap.Bundle)
 	}
 
 	// Clone beside the live image and rename over it, so a failure partway

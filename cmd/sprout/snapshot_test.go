@@ -25,6 +25,7 @@ func newTestInstance(t *testing.T, root, id, name, varContent string) string {
 		Bundle:    "/nix/store/deadbeef-sprout-vm-dev",
 		GuestIP:   "192.168.127.2",
 		SSHUser:   "dev",
+		Platform:  hostPlatform(t),
 	}); err != nil {
 		t.Fatal(err)
 	}

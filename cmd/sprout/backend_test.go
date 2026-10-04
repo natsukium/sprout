@@ -391,3 +391,8 @@ func TestResolveInstanceSocketsPlacesEveryBackendSocketInTheSocketDir(t *testing
 		t.Errorf("over-long socket dir: error = %v, want the path-limit refusal", err)
 	}
 }
+
+func hostPlatform(t testing.TB) Platform {
+	t.Helper()
+	return hostManifest(t).platform()
+}

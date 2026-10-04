@@ -46,6 +46,11 @@ sprout start
 Restore discards the current `/var` and prompts before it does; `--force`
 skips the prompt. There is no `--live` here: swapping the disk under a
 running VM corrupts both it and whatever the guest still holds in memory.
+Restore also refuses, before touching `/var`, a snapshot whose record is
+missing or unreadable or that was taken on a different host, guest, or
+backend than the instance's; such a snapshot still lists, and `sprout snapshot
+delete` removes it (see [reusing a
+disk](../reference/instance-state.md#reusing-a-disk)).
 
 Snapshots are not automatically pruned. Delete one with `sprout snapshot delete
 before-migration`; `sprout delete` on the instance takes all of them with it, and

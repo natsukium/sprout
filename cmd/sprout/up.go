@@ -78,6 +78,9 @@ func cmdUp(selector, def, flakeRef, bundle string, foreground bool, expect strin
 	if err != nil {
 		return err
 	}
+	if err := refuseDiskWithoutRecord(id.ID, id.Display()); err != nil {
+		return err
+	}
 	// The detached parent resolved the selector once; if its instance was
 	// deleted since, this child's re-resolution would mint a different
 	// instance than the one the parent waits on — the pinned ID turns that
@@ -369,6 +372,14 @@ func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle stri
 	if err := tok.verify(); err != nil {
 		return nil, nil, err
 	}
+	// Before anything acts on the instance, so a refusal leaves a running VM
+	// running and the record still describing the disk.
+	if err := checkUpCompatible(id, dir, manifest); err != nil {
+		return nil, nil, err
+	}
+	if err := checkInstanceSocketPaths(id.ID, manifest); err != nil {
+		return nil, nil, err
+	}
 	if instanceRunning(id.ID) {
 		prev, _, loadErr := loadInstance(id.ID)
 		if loadErr == nil && sameBundle(prev.Bundle, bundle) {
@@ -407,6 +418,7 @@ func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle stri
 	inst := id.newInstance()
 	inst.Definition, inst.Bundle = def, bundle
 	inst.GuestIP, inst.SSHUser = manifest.Guest.IP, manifest.Guest.SSHUser
+	inst.Platform = manifest.platform()
 	if err := writeJSON(instanceRecordPath(dir), inst); err != nil {
 		lock.Close()
 		return nil, nil, err
@@ -418,6 +430,18 @@ func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle stri
 	}
 	tok.remove()
 	return lock, inst, nil
+}
+
+// `up` is a create command, so no record and no disk is a new instance.
+func checkUpCompatible(id *Identity, dir string, manifest *Manifest) error {
+	prev, _, err := loadInstance(id.ID)
+	if err != nil {
+		if _, statErr := os.Stat(varImagePath(dir)); os.IsNotExist(statErr) {
+			return nil
+		}
+		return diskWithoutRecordError(id.Display(), err)
+	}
+	return checkInstancePlatform(id.Display(), prev.Platform, manifest.platform())
 }
 
 // Convergence compares builds, not spellings: a legacy record is resolved,
@@ -641,7 +665,7 @@ func loadManifest(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, err := hostNixSystem()
+	host, err := runningHostSystem()
 	if err != nil {
 		return nil, err
 	}

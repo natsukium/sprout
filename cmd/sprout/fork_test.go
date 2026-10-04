@@ -21,6 +21,7 @@ func pointBundleAtRealDir(t *testing.T, id string) string {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeHostManifest(t, bundle)
 	inst.Bundle = bundle
 	if err := writeJSON(filepath.Join(dir, "instance.json"), inst); err != nil {
 		t.Fatal(err)

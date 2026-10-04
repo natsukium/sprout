@@ -169,13 +169,13 @@ func TestInstanceSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"version": 1`) {
+	if !strings.Contains(string(data), `"version": 2`) {
 		t.Fatalf("instance record omitted schema version: %s", data)
 	}
 	if _, _, err := loadInstance("abcd12345678"); err != nil {
-		t.Fatalf("version-1 instance rejected: %v", err)
+		t.Fatalf("version-2 instance rejected: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(`{"version":2,"id":"abcd12345678"}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":3,"id":"abcd12345678"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := loadInstance("abcd12345678"); err == nil {
