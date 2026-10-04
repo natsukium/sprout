@@ -8,6 +8,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.47.0
+	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798
 	pgregory.net/rapid v1.3.0
 )
 
@@ -32,5 +33,4 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798 // indirect
 )

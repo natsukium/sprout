@@ -55,6 +55,29 @@ func startNetwork(ctx context.Context, netSock string, m *Manifest) (*virtualnet
 	return vn, nil
 }
 
+// One session per runner process; the loop covers runner restarts within the
+// daemon's lifetime.
+//
+// The session runs on the loop rather than in its own goroutine: vfkit's
+// accept only peeks the listening datagram socket and hands back that same
+// socket, so accepting again while a session runs succeeds once per queued
+// frame, and every extra session splits the guest's frames and receives a copy
+// of each broadcast.
+func serveNICSessions(ctx context.Context, backend string, accept func() (net.Conn, error), session func(context.Context, net.Conn) error) {
+	for {
+		conn, err := accept()
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("%s network accept: %v", backend, err)
+			}
+			return
+		}
+		if err := session(ctx, conn); err != nil && ctx.Err() == nil {
+			log.Printf("%s network session ended: %v", backend, err)
+		}
+	}
+}
+
 // Wildcard domains resolve here, at the gateway's resolver, rather than in a
 // guest-side resolver on loopback: kubelet and docker copy the guest's
 // /etc/resolv.conf into other network namespaces, where a loopback nameserver

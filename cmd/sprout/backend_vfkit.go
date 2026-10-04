@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -33,24 +32,8 @@ func (vfkitUnixgram) serve(ctx context.Context, vn *virtualnetwork.VirtualNetwor
 		ln.Close()
 		_ = os.Remove(netSock)
 	}()
-	go func() {
-		// One connection per vfkit process; the loop covers VM restarts
-		// within the daemon's lifetime.
-		for {
-			conn, err := transport.AcceptVfkit(ln)
-			if err != nil {
-				if ctx.Err() == nil {
-					log.Printf("vfkit accept: %v", err)
-				}
-				return
-			}
-			go func() {
-				if err := vn.AcceptVfkit(ctx, conn); err != nil && ctx.Err() == nil {
-					log.Printf("vfkit network session ended: %v", err)
-				}
-			}()
-		}
-	}()
+	accept := func() (net.Conn, error) { return transport.AcceptVfkit(ln) }
+	go serveNICSessions(ctx, "vfkit", accept, vn.AcceptVfkit)
 	return nil
 }
 

@@ -60,7 +60,7 @@ type consoleMode interface {
 var (
 	networkTransports = map[string]networkTransport{
 		"vfkit-unixgram": vfkitUnixgram{},
-		"qemu-stream":    nil,
+		"qemu-stream":    qemuStream{},
 	}
 	controlProtocols = map[string]controlProtocol{
 		"vfkit-rest": vfkitREST{},

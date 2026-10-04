@@ -10,7 +10,7 @@ All options below are the same whether you declare a VM through the
 | --- | --- | --- |
 | `backend` | `"auto"` | VM backend. `"auto"` resolves per host bundle: `vfkit` on `aarch64-darwin`, `qemu` on Linux. A named backend the host does not allow fails evaluation of that host's bundle with the allowed list; today each host allows exactly one. |
 | `vcpu` | `4` | Virtual CPUs. |
-| `mem` | `8192` | Memory: an integer MiB count, or a string with a unit (`"8GiB"`, `"512MiB"`). |
+| `mem` | `8192` | Memory: an integer MiB count, or a string with a unit (`"8GiB"`, `"512MiB"`). On `x86_64-linux` exactly 2048 MiB boots with 2050 MiB, because QEMU's microvm machine hangs at boot with exactly 2 GiB. |
 | `diskSize` | `102400` | Persistent `/var` volume size (sparse); integer MiB or a unit string. Host space from files deleted in `/var` returns at the guest's daily `fstrim`, or within minutes of the next boot if that run was missed; `services.fstrim` in `modules` overrides it. |
 | `workspace` | `true` | Mount the git toplevel at `/workspace` (virtiofs). |
 | `writableStore` | `false` | Overlay a writable `/nix/store` over the host share, so `nix build` works inside the guest. The overlay lives on the persistent `/var` volume, so big closures don't eat guest RAM and paths built once survive `stop`/`up`. |

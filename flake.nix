@@ -113,7 +113,7 @@
                   ./go.sum
                 ];
               };
-              vendorHash = "sha256-83MjpMHZXJeudWkl6SwSp6IT47Sv45bEeVsoECh8S2c=";
+              vendorHash = "sha256-hT/ygceqQPSyGi6ySzJeZ7nuLaqcmOfvhudW+L+Kxvc=";
               subPackages = [ "cmd/sprout" ];
               ldflags = [ "-X main.version=${version}" ];
               doCheck = false;

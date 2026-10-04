@@ -150,6 +150,150 @@ in
         else
           throw "backend selection: ${builtins.toJSON failures}";
 
+      checks.qemu-backend =
+        let
+          hostPkgs = host: withSystem host ({ pkgs, ... }: pkgs);
+          vmOn = host: args: self.lib.mkVM ({ pkgs = hostPkgs host; } // args);
+          guestOn = host: args: (vmOn host args).nixos.config;
+          refusals =
+            cfg:
+            lib.filter (lib.hasPrefix "sprout:") (
+              map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions)
+            );
+          refusedFor = needle: cfg: builtins.any (lib.hasInfix needle) (refusals cfg);
+          withModule = host: module: guestOn host { modules = [ module ]; };
+          memOn = host: mem: (guestOn host { inherit mem; }).microvm.mem;
+          nic =
+            host:
+            let
+              m = (vmOn host { }).manifest;
+            in
+            {
+              args = (guestOn host { }).microvm.qemu.extraArgs;
+              netSubstituted = builtins.elem {
+                placeholder = "/sprout/placeholder/sock/${m.backend.network.socket}";
+                value = "socket:${m.backend.network.socket}";
+              } m.substitutions;
+            };
+          expectedNic = mac: {
+            args = [
+              "-netdev"
+              "stream,id=sprout0,server=off,addr.type=unix,addr.path=/sprout/placeholder/sock/net.sock"
+              "-device"
+              "virtio-net-pci,netdev=sprout0,mac=${mac},romfile="
+            ];
+            netSubstituted = true;
+          };
+          sizes = [
+            512
+            2047
+            2048
+            "2048MiB"
+            "2GiB"
+            2049
+            4096
+            "8GiB"
+          ];
+          failures = lib.runTests {
+            testX86_64RunnerDialsTheNetSocketWithTheLeaseMac = {
+              expr = nic "x86_64-linux";
+              expected = expectedNic (vmOn "x86_64-linux" { }).manifest.guest.mac;
+            };
+            testAarch64RunnerDialsTheNetSocketWithTheLeaseMac = {
+              expr = nic "aarch64-linux";
+              expected = expectedNic (vmOn "aarch64-linux" { }).manifest.guest.mac;
+            };
+            testX86_64MicrovmNeverBootsWithExactly2048MiB = {
+              expr = map (memOn "x86_64-linux") sizes;
+              expected = [
+                512
+                2047
+                2050
+                2050
+                2050
+                2049
+                4096
+                8192
+              ];
+            };
+            testAarch64VirtKeepsTheRequestedMemory = {
+              expr = map (memOn "aarch64-linux") sizes;
+              expected = [
+                512
+                2047
+                2048
+                2048
+                2048
+                2049
+                4096
+                8192
+              ];
+            };
+            testDefaultLinuxGuestsPassEveryQemuCheck = {
+              expr = map (host: refusals (guestOn host { })) [
+                "x86_64-linux"
+                "aarch64-linux"
+              ];
+              expected = [
+                [ ]
+                [ ]
+              ];
+            };
+            testForcing2048MiBOnMicrovmIsRefused = {
+              expr = refusedFor "exactly 2048 MiB" (
+                withModule "x86_64-linux" { microvm.mem = lib.mkForce 2048; }
+              );
+              expected = true;
+            };
+            testQemuWithoutStreamNetdevIsRefused = {
+              expr = refusedFor "QEMU 7.2 or newer" (
+                withModule "x86_64-linux" (
+                  { pkgs, ... }:
+                  {
+                    microvm.qemu.package = lib.mkForce (pkgs.qemu_kvm // { version = "7.1.0"; });
+                  }
+                )
+              );
+              expected = true;
+            };
+            testMemoryOrMachineInExtraArgsIsRefused = {
+              expr =
+                map
+                  (
+                    arg:
+                    refusedFor "not microvm.qemu.extraArgs" (
+                      withModule "x86_64-linux" {
+                        microvm.qemu.extraArgs = [
+                          arg
+                          "x"
+                        ];
+                      }
+                    )
+                  )
+                  [
+                    "-m"
+                    "--m"
+                    "-M"
+                    "--M"
+                    "-machine"
+                    "--machine"
+                  ];
+              expected = [
+                true
+                true
+                true
+                true
+                true
+                true
+              ];
+            };
+          };
+        in
+        if failures == [ ] then
+          pkgs.runCommand "qemu-backend" { } "touch $out"
+        else
+          throw "qemu backend: ${builtins.toJSON failures}";
+
       devShells.default = pkgs.mkShell {
         packages = [
           pkgs.git-cliff

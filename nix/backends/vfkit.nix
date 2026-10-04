@@ -1,10 +1,10 @@
-{ guest, socketPlaceholder }:
+{ guest, socketPlaceholder, ... }:
 let
   network = "net.sock";
   control = "vfkit-rest.sock";
 in
 {
-  microvm = {
+  module.microvm = {
     hypervisor = "vfkit";
     # Absolute, because microvm.nix prefixes a relative socket with the
     # runner's cwd — the instance state dir, whose depth is unbounded (see
