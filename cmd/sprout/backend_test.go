@@ -121,7 +121,16 @@ func withBootableHostBackend(t *testing.T) {
 		if consoleModes[k.vocabulary.console] == nil {
 			restoreEntry(t, consoleModes, k.vocabulary.console, consoleMode(stubConsole{}))
 		}
+		if k.sharesNeedSidecars {
+			superviseSidecars(t)
+		}
 	}
+}
+
+func superviseSidecars(t *testing.T) {
+	prev := sidecarsSupervised
+	sidecarsSupervised = true
+	t.Cleanup(func() { sidecarsSupervised = prev })
 }
 
 func restoreEntry[T any](t *testing.T, m map[string]T, key string, v T) {
@@ -353,9 +362,16 @@ func TestBootableHostFor(t *testing.T) {
 }
 
 // Bootability is a registry fact: implementing every operation of a host's
-// kind is all it takes to boot there.
+// kind, and supervising sidecars when its shares need them, is all it takes
+// to boot there.
 func TestBootableHostFollowsTheRegistry(t *testing.T) {
 	restoreEntry(t, networkTransports, "qemu-stream", networkTransport(stubTransport{}))
+	restoreEntry(t, controlProtocols, "qmp", controlProtocol(stubControl{}))
+	restoreEntry(t, consoleModes, "stdio", consoleMode(stubConsole{}))
+	if err := bootableHostFor("x86_64-linux"); err == nil {
+		t.Fatal("linux bootable with qemu's sidecars still unsupervised")
+	}
+	superviseSidecars(t)
 	restoreEntry(t, consoleModes, "stdio", consoleMode(nil))
 	if err := bootableHostFor("x86_64-linux"); err == nil {
 		t.Fatal("linux bootable with the qemu console still missing")

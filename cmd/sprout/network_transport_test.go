@@ -49,14 +49,15 @@ func TestManifestTransportSelectsItsWireProtocol(t *testing.T) {
 	}
 }
 
-// Only the network transport is in place for qemu; the kind must stay
-// unbootable until its control and console exist too.
-func TestQemuStreamAloneDoesNotMakeQemuBootable(t *testing.T) {
-	if networkTransports["qemu-stream"] == nil {
-		t.Fatal("qemu-stream is not registered")
+// Every qemu operation is registered, but its virtiofs shares still need
+// sidecars sprout does not supervise, so the kind must stay unbootable.
+func TestQemuStaysUnbootableWithoutSidecarSupervision(t *testing.T) {
+	k := lookupBackendKind("qemu")
+	if networkTransports[k.vocabulary.network] == nil || controlProtocols[k.vocabulary.control] == nil || consoleModes[k.vocabulary.console] == nil {
+		t.Fatal("a qemu operation is not registered")
 	}
-	if lookupBackendKind("qemu").implemented() {
-		t.Fatal("qemu reported implemented with only its network transport")
+	if k.implemented() {
+		t.Fatal("qemu reported implemented without sidecar supervision")
 	}
 }
 

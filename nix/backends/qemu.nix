@@ -1,5 +1,4 @@
-# Not bootable yet: QMP control, the stdio console and the virtiofs sidecars
-# are still missing. The manifest declares the whole contract regardless, so
+# Not bootable yet: the virtiofs sidecars are still missing. The manifest declares the whole contract regardless, so
 # a Linux bundle validates against the binary that will boot it.
 {
   guest,
