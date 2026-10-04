@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -67,44 +66,91 @@ func hostNixSystemFor(goos, goarch string) (string, error) {
 	return "", fmt.Errorf("sprout runs on aarch64-darwin, aarch64-linux, and x86_64-linux hosts (this is %s/%s); anything else is out of scope", goos, goarch)
 }
 
-func listDefinitions(flakeRef string) ([]string, error) {
-	systems, err := evalFlakeAttrNames(fmt.Sprintf("%s#sproutConfigurations", flakeRef), flakeRef)
-	if err != nil || systems == nil {
-		// A flake without the output has no VMs, which pickDefinition
-		// explains; it is not a broken flake.
-		return systems, err
+func requireBootableHost() error {
+	return bootableHostFor(runtime.GOOS)
+}
+
+func bootableHostFor(goos string) error {
+	if goos == "darwin" {
+		return nil
 	}
+	return fmt.Errorf("sprout cannot boot VMs on %s yet: Linux bundles build, but the QEMU/KVM backend that boots them is not implemented", goos)
+}
+
+func listDefinitions(flakeRef string) ([]string, error) {
 	host, err := hostNixSystem()
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(systems, host) {
-		return nil, fmt.Errorf("%s defines VMs but not for %s (it targets %s); add %q to systems", flakeRef, host, strings.Join(systems, ", "), host)
+	shape, found, err := evalOutputShape(flakeRef)
+	if err != nil || !found {
+		// A flake without the output has no VMs, which pickDefinition
+		// explains; it is not a broken flake.
+		return nil, err
 	}
-	return evalFlakeAttrNames(fmt.Sprintf("%s#sproutConfigurations.%s", flakeRef, host), flakeRef)
-}
-
-// A missing output reads as an empty definition set; anything else —
-// including a missing system slice under an output that exists — is a real
-// evaluation failure the user must see.
-func evalFlakeAttrNames(attr, flakeRef string) ([]string, error) {
-	cmd := exec.Command("nix", "eval", "--json", attr, "--apply", "builtins.attrNames")
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		if missingOutput(stderr.String()) {
-			return nil, nil
-		}
-		os.Stderr.WriteString(stderr.String())
-		return nil, fmt.Errorf("listing VM definitions in %s: %w", flakeRef, err)
+	if err := checkOutputShape(flakeRef, host, shape); err != nil {
+		return nil, err
 	}
 	var names []string
-	if err := json.Unmarshal(out, &names); err != nil {
-		return nil, fmt.Errorf("listing VM definitions in %s: %w", flakeRef, err)
+	if _, err := evalFlakeJSON(fmt.Sprintf("%s#sproutConfigurations.%s", flakeRef, host), "builtins.attrNames", flakeRef, &names); err != nil {
+		return nil, err
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func evalOutputShape(flakeRef string) (map[string]bool, bool, error) {
+	var shape map[string]bool
+	found, err := evalFlakeJSON(fmt.Sprintf("%s#sproutConfigurations", flakeRef),
+		`cfgs: builtins.mapAttrs (_: v: (v.type or null) == "derivation") cfgs`, flakeRef, &shape)
+	return shape, found, err
+}
+
+func checkOutputShape(flakeRef, host string, shape map[string]bool) error {
+	var keys, unqualified []string
+	for k, isBundle := range shape {
+		keys = append(keys, k)
+		if isBundle {
+			unqualified = append(unqualified, k)
+		}
+	}
+	sort.Strings(keys)
+	sort.Strings(unqualified)
+	if len(unqualified) > 0 {
+		return fmt.Errorf("%s exposes VMs as sproutConfigurations.<name> (%s), but this sprout reads sproutConfigurations.<system>.<name>; update the flake's sprout input (nix flake update sprout), or nest a lib.mkVMs result under the host: sproutConfigurations.%s = sprout.lib.mkVMs { ... }",
+			flakeRef, strings.Join(unqualified, ", "), host)
+	}
+	if _, ok := shape[host]; !ok {
+		return fmt.Errorf("%s defines VMs but not for %s (it targets %s); add %q to systems", flakeRef, host, strings.Join(keys, ", "), host)
+	}
+	return nil
+}
+
+// Nil when the shape is fine or unreadable, so the build's own error stands.
+func diagnoseOutputShape(flakeRef, host string) error {
+	shape, found, err := evalOutputShape(flakeRef)
+	if err != nil || !found {
+		return nil
+	}
+	return checkOutputShape(flakeRef, host, shape)
+}
+
+func evalFlakeJSON(attr, apply, flakeRef string, out any) (bool, error) {
+	cmd := exec.Command("nix", "eval", "--json", attr, "--apply", apply)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	data, err := cmd.Output()
+	if err != nil {
+		if missingOutput(stderr.String()) {
+			return false, nil
+		}
+		os.Stderr.WriteString(stderr.String())
+		return false, fmt.Errorf("listing VM definitions in %s: %w", flakeRef, err)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return false, fmt.Errorf("listing VM definitions in %s: %w", flakeRef, err)
+	}
+	return true, nil
 }
 
 // Matched on the attribute name too, so a missing-attribute error from deeper

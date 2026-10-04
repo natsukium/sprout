@@ -39,6 +39,9 @@ func newRunCmd() *cobra.Command {
 }
 
 func cmdRun(def, flakeRef string, command []string) error {
+	if err := requireBootableHost(); err != nil {
+		return err
+	}
 	// Before the child `up` spawns, so an ambiguous flake fails here with the
 	// candidate list instead of inside background boot chatter.
 	definition, err := resolveDefinition(flakeRef, def)

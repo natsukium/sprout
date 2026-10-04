@@ -26,7 +26,7 @@ Each instance takes the `sprout.vms.<name>` options inline, defaults
 included: `idle.action` still defaults to `"stop"`, so without the `"none"`
 above a quiet runner stops itself after `idle.after` and launchd boots it
 again — an always-on instance should not race its own idle timer. `darwin-rebuild`
-builds the same bundle as `nix build .#sproutConfigurations.<name>`, then a
+builds the same bundle as `nix build .#sproutConfigurations.aarch64-darwin.<name>`, then a
 `launchd.daemons.sprout-<name>` job boots it with `sprout up --foreground
 --bundle`. The job restarts on failure and allows a clean guest poweroff before
 launchd escalates SIGTERM to SIGKILL.

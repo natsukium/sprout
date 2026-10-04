@@ -116,6 +116,48 @@ func TestHostNixSystemFor(t *testing.T) {
 	}
 }
 
+// Unqualified definition names must not be read as host systems.
+func TestCheckOutputShape(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		shape   map[string]bool
+		wantErr []string
+	}{
+		{"qualified, host present", map[string]bool{"aarch64-darwin": false, "x86_64-linux": false}, nil},
+		{"qualified, host missing", map[string]bool{"aarch64-darwin": false}, []string{"not for x86_64-linux", "aarch64-darwin", `add "x86_64-linux" to systems`}},
+		{"unqualified", map[string]bool{"dev": true, "ci": true}, []string{"ci, dev", "nix flake update sprout", "sproutConfigurations.x86_64-linux = sprout.lib.mkVMs"}},
+		{"unqualified definition named like a host", map[string]bool{"x86_64-linux": true}, []string{"nix flake update sprout"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkOutputShape(".", "x86_64-linux", c.shape)
+			if c.wantErr == nil {
+				if err != nil {
+					t.Fatalf("want accepted, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("want rejected, got nil")
+			}
+			for _, want := range c.wantErr {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// Linux hosts are refused until a Linux backend boots guests.
+func TestBootableHostFor(t *testing.T) {
+	if err := bootableHostFor("darwin"); err != nil {
+		t.Errorf("darwin rejected: %v", err)
+	}
+	if err := bootableHostFor("linux"); err == nil || !strings.Contains(err.Error(), "QEMU/KVM") {
+		t.Errorf("linux = %v, want a not-yet-implemented refusal naming the backend", err)
+	}
+}
+
 // Both failure modes share nix's "does not provide attribute" wording, but a
 // missing sproutConfigurations output means "no VMs defined" while a missing
 // attribute deeper in the flake is a real error the user must see.

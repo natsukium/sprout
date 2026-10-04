@@ -63,6 +63,9 @@ lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
 }
 
 func cmdUp(selector, def, flakeRef, bundle string, foreground bool, expect string) error {
+	if err := requireBootableHost(); err != nil {
+		return err
+	}
 	definition := def
 	if bundle == "" {
 		var err error
@@ -308,6 +311,9 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 		fmt.Printf("building %s#sproutConfigurations.%s.%s …\n", flakeRef, host, def)
 		bundle, err = nixBuild(stagingBundleLink(tok.dir), flakeRef, host, def)
 		if err != nil {
+			if shapeErr := diagnoseOutputShape(flakeRef, host); shapeErr != nil {
+				return shapeErr
+			}
 			return err
 		}
 	} else {
