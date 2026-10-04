@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/containers/gvisor-tap-vsock/pkg/transport"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -367,6 +369,49 @@ func TestQemuStreamAcceptsARestartedRunner(t *testing.T) {
 		gcancel()
 		nic.Close()
 		guest.Close()
+	}
+}
+
+// vfkit's accept returns the listening socket itself, so frames still queued
+// behind a running session must not be taken for another peer.
+func TestVfkitFramesQueuedDuringASessionOpenNoSecondSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sock := filepath.Join(shortSocketDir(t), "net.sock")
+	ln, err := transport.ListenUnixgram("unixgram://" + sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	nic := dialVfkitNIC(t, sock)
+	defer nic.Close()
+	// Few enough for macOS, which caps a unixgram receive queue at a few KiB;
+	// a single queued frame already lets a peeking accept succeed repeatedly.
+	for range 4 {
+		if err := nic.send(make([]byte, 60)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var sessions atomic.Int32
+	first := make(chan struct{})
+	accept := func() (net.Conn, error) { return transport.AcceptVfkit(ln) }
+	go serveNICSessions(ctx, "vfkit", accept, func(ctx context.Context, _ net.Conn) error {
+		if sessions.Add(1) == 1 {
+			close(first)
+		}
+		<-ctx.Done()
+		return nil
+	})
+
+	select {
+	case <-first:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no session for the queued frames")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := sessions.Load(); n != 1 {
+		t.Fatalf("%d sessions opened for one vfkit peer, want 1", n)
 	}
 }
 

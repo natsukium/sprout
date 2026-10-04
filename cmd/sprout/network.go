@@ -57,6 +57,12 @@ func startNetwork(ctx context.Context, netSock string, m *Manifest) (*virtualnet
 
 // One session per runner process; the loop covers runner restarts within the
 // daemon's lifetime.
+//
+// The session runs on the loop rather than in its own goroutine: vfkit's
+// accept only peeks the listening datagram socket and hands back that same
+// socket, so accepting again while a session runs succeeds once per queued
+// frame, and every extra session splits the guest's frames and receives a copy
+// of each broadcast.
 func serveNICSessions(ctx context.Context, backend string, accept func() (net.Conn, error), session func(context.Context, net.Conn) error) {
 	for {
 		conn, err := accept()
@@ -66,11 +72,9 @@ func serveNICSessions(ctx context.Context, backend string, accept func() (net.Co
 			}
 			return
 		}
-		go func() {
-			if err := session(ctx, conn); err != nil && ctx.Err() == nil {
-				log.Printf("%s network session ended: %v", backend, err)
-			}
-		}()
+		if err := session(ctx, conn); err != nil && ctx.Err() == nil {
+			log.Printf("%s network session ended: %v", backend, err)
+		}
 	}
 }
 
