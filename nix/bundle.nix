@@ -298,7 +298,7 @@ in
       inherit (vmParts hostPkgs name vmCfg) nixos manifest;
       manifestFile = hostPkgs.writeText "sprout-manifest-${name}.json" (builtins.toJSON manifest);
     in
-    hostPkgs.runCommand "sprout-vm-${name}" { } ''
+    hostPkgs.runCommand "sprout-vm-${name}" { passthru = { inherit manifest; }; } ''
       mkdir -p $out
       ln -s ${nixos.config.microvm.declaredRunner}/bin/microvm-run $out/runner
       cp ${manifestFile} $out/manifest.json

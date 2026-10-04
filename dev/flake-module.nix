@@ -1,4 +1,12 @@
-{ inputs, self, ... }:
+{
+  inputs,
+  self,
+  lib,
+  ...
+}:
+let
+  credentialHostCheck = import ./credential-host-check.nix { inherit inputs lib; };
+in
 {
   imports = [
     inputs.treefmt-nix.flakeModule
@@ -33,6 +41,7 @@
       # `nix flake check` only evaluates `packages`, so a stale vendorHash or a
       # host-specific build break would otherwise pass.
       checks.sprout = config.packages.sprout;
+      checks.credential-host = credentialHostCheck pkgs;
 
       checks.guest-host-gating =
         let
