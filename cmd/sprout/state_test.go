@@ -95,12 +95,12 @@ func TestSanitizeNameProperties(t *testing.T) {
 // An unimplemented schema version fails loudly instead of booting with
 // silently ignored instructions.
 func TestManifestVersionRejected(t *testing.T) {
-	var m Manifest
-	if err := jsonUnmarshalStrictVersion([]byte(`{"version":2}`), &m); err == nil {
-		t.Fatal("version 2 manifest accepted, want rejection")
+	if _, err := parseManifest([]byte(`{"version":3}`), "aarch64-darwin"); err == nil {
+		t.Fatal("version 3 manifest accepted, want rejection")
 	}
-	if err := jsonUnmarshalStrictVersion([]byte(`{"version":1,"definition":"dev"}`), &m); err != nil {
-		t.Fatalf("version 1 manifest rejected: %v", err)
+	m, err := parseManifest(encodeDoc(t, v2ManifestDoc("aarch64-darwin", "vfkit")), "aarch64-darwin")
+	if err != nil {
+		t.Fatalf("version 2 manifest rejected: %v", err)
 	}
 	if m.Definition != "dev" {
 		t.Fatalf("definition not parsed: %q", m.Definition)
@@ -169,13 +169,13 @@ func TestInstanceSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"version": 1`) {
+	if !strings.Contains(string(data), `"version": 2`) {
 		t.Fatalf("instance record omitted schema version: %s", data)
 	}
 	if _, _, err := loadInstance("abcd12345678"); err != nil {
-		t.Fatalf("version-1 instance rejected: %v", err)
+		t.Fatalf("version-2 instance rejected: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(`{"version":2,"id":"abcd12345678"}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":3,"id":"abcd12345678"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := loadInstance("abcd12345678"); err == nil {
@@ -186,14 +186,16 @@ func TestInstanceSchemaVersion(t *testing.T) {
 // An omitted hostLoopback field stays disabled: the alias exposes all of the
 // host's 127.0.0.1 listeners to the guest, so absent must mean off.
 func TestManifestHostLoopbackDefaultsOff(t *testing.T) {
-	var m Manifest
-	if err := jsonUnmarshalStrictVersion([]byte(`{"version":1,"definition":"dev"}`), &m); err != nil {
+	doc := v2ManifestDoc("aarch64-darwin", "vfkit")
+	m, err := parseManifest(encodeDoc(t, doc), "aarch64-darwin")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if m.HostLoopback {
 		t.Fatal("hostLoopback true for a manifest that never mentioned it")
 	}
-	if err := jsonUnmarshalStrictVersion([]byte(`{"version":1,"hostLoopback":true}`), &m); err != nil {
+	doc["hostLoopback"] = true
+	if m, err = parseManifest(encodeDoc(t, doc), "aarch64-darwin"); err != nil {
 		t.Fatal(err)
 	}
 	if !m.HostLoopback {
@@ -202,17 +204,25 @@ func TestManifestHostLoopbackDefaultsOff(t *testing.T) {
 }
 
 // The manifest is the Nix to Go trust boundary, so arbitrary bytes must never
-// panic and must still meet the version gate.
+// panic, and nothing passes without meeting the version gate and yielding a
+// contract.
 func FuzzManifestParse(f *testing.F) {
-	f.Add([]byte(`{"version":1,"definition":"dev","guest":{"ip":"192.168.127.2"}}`))
-	f.Add([]byte(`{"version":2}`))
-	f.Add([]byte(`{`))
-	f.Add([]byte(``))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var m Manifest
-		err := jsonUnmarshalStrictVersion(data, &m)
-		if err == nil && m.Version != manifestSchemaVersion {
+	f.Add(encodeDoc(f, v2ManifestDoc("aarch64-darwin", "vfkit")), "aarch64-darwin")
+	f.Add(encodeDoc(f, v2ManifestDoc("x86_64-linux", "qemu")), "x86_64-linux")
+	f.Add([]byte(`{"version":1,"definition":"dev","guestArch":"aarch64-linux","restSocket":"vfkit-rest.sock"}`), "aarch64-darwin")
+	f.Add([]byte(`{"version":3}`), "aarch64-darwin")
+	f.Add([]byte(`{`), "x86_64-linux")
+	f.Add([]byte(``), "x86_64-linux")
+	f.Fuzz(func(t *testing.T, data []byte, host string) {
+		m, err := parseManifest(data, host)
+		if err != nil {
+			return
+		}
+		if m.Version != 1 && m.Version != manifestSchemaVersion {
 			t.Fatalf("accepted unsupported version %d", m.Version)
+		}
+		if m.contract == nil || m.Host.System != host {
+			t.Fatalf("accepted a manifest without a contract for this host: %+v", m)
 		}
 	})
 }

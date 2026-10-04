@@ -45,12 +45,13 @@ func TestManifestRunnerContract(t *testing.T) {
 	}
 
 	subs := map[string]string{
-		"netSocket":  "/dummy/net.sock",
-		"restSocket": "/dummy/vfkit-rest.sock",
 		"dataDir":    "/dummy/data",
 		"workspace":  "/dummy/workspace",
 		"gitCommon":  "/dummy/gitcommon",
 		"consolePty": "virtio-serial,pty",
+	}
+	for _, name := range m.contract.socketNames() {
+		subs["socket:"+name] = "/dummy/" + name
 	}
 	for _, c := range m.Credentials {
 		subs["credential:"+c.Name] = "/dummy/credential/" + c.Name
@@ -72,9 +73,9 @@ func TestManifestRunnerContract(t *testing.T) {
 	if strings.Contains(string(data), "/sprout/placeholder/") {
 		t.Fatalf("rewritten runner still contains an unresolved placeholder")
 	}
-	// The REST socket must reach the runner absolute, or microvm.nix expands it
+	// The control socket must reach the runner absolute, or microvm.nix expands it
 	// against the runner's cwd (see nix/bundle.nix).
-	if !strings.Contains(string(data), "SOCKET_ABS="+subs["restSocket"]) {
+	if !strings.Contains(string(data), "SOCKET_ABS="+subs["socket:"+m.contract.controlSocket]) {
 		t.Fatal("runner does not take vfkit's REST socket from the substituted absolute path")
 	}
 }

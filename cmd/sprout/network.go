@@ -16,7 +16,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/containers/gvisor-tap-vsock/pkg/transport"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 )
@@ -35,7 +34,7 @@ func startNetwork(ctx context.Context, netSock string, m *Manifest) (*virtualnet
 		DHCPStaticLeases: map[string]string{
 			m.Guest.IP: m.Guest.MAC,
 		},
-		Protocol: types.VfkitProtocol,
+		Protocol: m.contract.network.protocol(),
 	}
 	// Opt-in: the alias exposes every 127.0.0.1 listener on the host, so
 	// wiring it unconditionally would undercut the VM as a boundary.
@@ -49,35 +48,9 @@ func startNetwork(ctx context.Context, netSock string, m *Manifest) (*virtualnet
 		return nil, fmt.Errorf("virtual network: %w", err)
 	}
 
-	_ = os.Remove(netSock)
-	ln, err := transport.ListenUnixgram("unixgram://" + netSock)
-	if err != nil {
-		return nil, fmt.Errorf("vfkit socket listen: %w", err)
+	if err := m.contract.network.serve(ctx, vn, netSock); err != nil {
+		return nil, err
 	}
-
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-		_ = os.Remove(netSock)
-	}()
-	go func() {
-		// One connection per vfkit process; the loop covers VM restarts
-		// within the daemon's lifetime.
-		for {
-			conn, err := transport.AcceptVfkit(ln)
-			if err != nil {
-				if ctx.Err() == nil {
-					log.Printf("vfkit accept: %v", err)
-				}
-				return
-			}
-			go func() {
-				if err := vn.AcceptVfkit(ctx, conn); err != nil && ctx.Err() == nil {
-					log.Printf("vfkit network session ended: %v", err)
-				}
-			}()
-		}
-	}()
 
 	return vn, nil
 }

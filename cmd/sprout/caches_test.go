@@ -126,12 +126,12 @@ func TestAddCacheSubstitutionsCreatesDirs(t *testing.T) {
 
 	repo := "/src/myproj/.git"
 	m := &Manifest{
-		GuestArch: "aarch64-linux",
 		Caches: []CacheSpec{
 			{Name: "sccache", Scope: "shared"},
 			{Name: "cargo", Scope: "project"},
 		},
 	}
+	m.Guest.System = "aarch64-linux"
 	subs := map[string]string{}
 	if err := addCacheSubstitutions(m, subs, repo); err != nil {
 		t.Fatal(err)

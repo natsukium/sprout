@@ -4,6 +4,7 @@
 { localInputs, lib }:
 let
   systems = import ./systems.nix;
+  backends = import ./backends;
   parseSize =
     v:
     if builtins.isInt v then
@@ -33,8 +34,6 @@ let
   placeholderFor = kind: name: "${placeholderRoot}/${kind}/${name}";
 
   placeholders = {
-    netSocket = "${placeholderRoot}/net.sock";
-    restSocket = "${placeholderRoot}/${restSocket}";
     data = "${placeholderRoot}/data";
     workspace = "${placeholderRoot}/workspace";
     gitCommon = "${placeholderRoot}/gitcommon";
@@ -46,13 +45,6 @@ let
   gitCommonMount = "/run/sprout-git";
 
   dataMount = "/run/sprout";
-
-  # vfkit's REST control socket. The bare name goes to the manifest, which the
-  # host joins onto the short socket dir; the runner gets the absolute
-  # placeholder, because microvm.nix prefixes a relative socket with the
-  # runner's cwd — the instance state dir, whose depth is unbounded (see
-  # socketdir.go).
-  restSocket = "vfkit-rest.sock";
 
   guest = {
     # A DHCP static lease in the embedded gvproxy stack pins the guest to
@@ -66,11 +58,14 @@ let
   vmParts =
     hostPkgs: name: vmCfg:
     let
-      # Derived from the host rather than exposed as options, which would
+      hostSystem = hostPkgs.stdenv.hostPlatform.system;
+      # Derived from the host rather than exposed as an option, which would
       # accept combinations the runners cannot boot.
-      guestSystem = systems.guestFor hostPkgs.stdenv.hostPlatform.system;
-      hypervisor = systems.hypervisorFor hostPkgs.stdenv.hostPlatform.system;
-      isVfkit = hypervisor == "vfkit";
+      guestSystem = systems.guestFor hostSystem;
+      backend = backends.${systems.resolveBackend hostSystem vmCfg.backend} {
+        inherit guest;
+        socketPlaceholder = placeholderFor "sock";
+      };
       # Which fields a credential needs depends on its strategy, so entry.nix
       # cannot mark any of them mandatory; checked here instead.
       credentials = lib.mapAttrs (
@@ -141,15 +136,9 @@ let
           {
             networking.hostName = lib.mkDefault "sprout-${name}";
             microvm = {
-              inherit hypervisor;
               inherit (vmCfg) vcpu;
               mem = parseSize vmCfg.mem;
               vmHostPackages = hostPkgs;
-              socket = placeholders.restSocket;
-              # vfkit logs the allocated PTY path at info level; `sprout`
-              # parses it from the runner output to attach the console.
-              vfkit.logLevel = lib.mkIf isVfkit "info";
-
               # The store comes in via virtiofs instead of an erofs image:
               # no image rebuild on every guest change.
               storeOnDisk = false;
@@ -204,12 +193,9 @@ let
               # deterministic leases, in-process dialing (`sprout shell`
               # without host ports) and dynamic port forwarding.
               interfaces = [ ];
-              vfkit.extraArgs = lib.mkIf isVfkit [
-                "--device"
-                "virtio-net,unixSocketPath=${placeholders.netSocket},mac=${guest.mac}"
-              ];
             };
           }
+          { inherit (backend) microvm; }
           (import ./guest/credentials.nix {
             inherit guest dataMount;
             mountCreds = credsFor "mount";
@@ -229,14 +215,16 @@ let
       };
 
       manifest = {
-        version = 1;
+        version = 2;
         definition = name;
-        inherit guest;
-        # Keys the host-side cache trees.
-        guestArch = guestSystem;
+        host.system = hostSystem;
+        # system keys the host-side cache trees.
+        guest = guest // {
+          system = guestSystem;
+        };
+        inherit (backend) backend;
         workspace = vmCfg.workspace;
         hostLoopback = vmCfg.hostLoopback;
-        inherit restSocket;
         idle = { inherit (vmCfg.idle) action after; };
         # Answered by the resolver the gateway already runs, so the guest keeps
         # the resolver DHCP hands it. A guest-side resolver on loopback would
@@ -247,14 +235,6 @@ let
         credentials = credManifest;
         caches = cacheManifest;
         substitutions = [
-          {
-            placeholder = placeholders.netSocket;
-            value = "netSocket";
-          }
-          {
-            placeholder = placeholders.restSocket;
-            value = "restSocket";
-          }
           {
             placeholder = placeholders.data;
             value = "dataDir";
@@ -272,14 +252,7 @@ let
         ]
         ++ credMounts.substitutions
         ++ cacheMounts.substitutions
-        ++ lib.optionals isVfkit [
-          {
-            # vfkit's stdio console is unavailable on macOS 26, so attach
-            # through its supported PTY console instead.
-            placeholder = "virtio-serial,stdio";
-            value = "consolePty";
-          }
-        ];
+        ++ backend.substitutions;
       };
 
     in

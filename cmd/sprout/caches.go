@@ -79,7 +79,7 @@ func cachePathFor(guestArch string, c CacheSpec, repoRoot string) (string, error
 
 func addCacheSubstitutions(m *Manifest, subs map[string]string, repoRoot string) error {
 	for _, c := range m.Caches {
-		path, err := cachePathFor(m.GuestArch, c, repoRoot)
+		path, err := cachePathFor(m.Guest.System, c, repoRoot)
 		if err != nil {
 			return err
 		}

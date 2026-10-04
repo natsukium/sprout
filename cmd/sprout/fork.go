@@ -132,6 +132,15 @@ func cmdFork(selector string, live bool, newName string) error {
 		os.RemoveAll(dstDir)
 		return err
 	}
+	manifest, err := loadManifest(filepath.Join(bundle, "manifest.json"))
+	if err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
+	if err := checkInstancePlatform(src.Display(), srcInst.Platform, manifest.platform()); err != nil {
+		os.RemoveAll(dstDir)
+		return err
+	}
 	if storeRoot, ok := storeRootOf(bundle); ok {
 		// nix may create the link before failing, which the rollback removes.
 		if err := pinBundleRoot(bundleLinkPath(dstDir), storeRoot); err != nil {
@@ -145,6 +154,7 @@ func cmdFork(selector string, live bool, newName string) error {
 	// `sprout up` rebuilds against this worktree's flake.
 	inst.Definition, inst.Bundle = srcInst.Definition, bundle
 	inst.GuestIP, inst.SSHUser = srcInst.GuestIP, srcInst.SSHUser
+	inst.Platform = srcInst.Platform
 	cow, err := seedVolumeDir(dstDir, srcImg, running, instanceRecordPath(dstDir), inst)
 	if err != nil {
 		return err

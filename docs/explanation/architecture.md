@@ -11,7 +11,7 @@ Evaluating `sprout.vms.<name>` produces two artifacts, not one:
 ```
 nix build .#sproutConfigurations.<system>.<name>
 └── result/
-    ├── runner          # microvm.nix vfkit runner, placeholders baked in
+    ├── runner          # microvm.nix runner for the host's backend, placeholders baked in
     └── manifest.json   # host-side actions for the binary to perform
 ```
 
@@ -25,9 +25,36 @@ runtime value. At `up` time the binary substitutes the placeholders into a
 per-instance `run.sh`, so one build serves any number of instances and the
 runner stays upstream-compatible with no forked VM logic.
 
-The manifest is schema version 1. It is an explicit contract between the Nix
+The manifest is schema version 2. It is an explicit contract between the Nix
 module and the Go client: an unsupported version is rejected before any runner
 is started, rather than silently ignoring fields added by a newer flake.
+
+The manifest names the host and guest systems and the VM backend that boots
+the runner. A backend is a `kind` (`vfkit`, `qemu`) plus values from a few
+shared vocabularies, each of which the binary implements once:
+
+| Field | Values |
+| --- | --- |
+| `network.transport` | `vfkit-unixgram`, `qemu-stream` |
+| `control.protocol` | `vfkit-rest`, `qmp` |
+| `console.mode` | `pty-announce` (vfkit announces a PTY), `stdio` (runner output is the console) |
+| `sidecars` | host processes started before the runner, each ready once its socket appears |
+
+The kind is identity — which hosts can run it, how its VM process is
+recognised, which diagnostics apply, and whether existing state may be reused
+— while behaviour comes from the vocabulary values. Every socket a backend
+uses is a bare name (`net.sock`) that the binary resolves inside the short
+socket directory and substitutes as an absolute path for the shared
+placeholder `/sprout/placeholder/sock/<name>`; names must be a single path
+component and distinct from each other and from `control.sock`.
+
+Validation and boot are separate steps. A manifest whose kind this host
+cannot run is refused by name ("this bundle targets qemu on x86_64-linux;
+this sprout on aarch64-darwin supports vfkit"). A manifest that is valid for a
+backend whose operations this binary does not implement yet — `qemu`, today —
+is refused before any instance state is touched. A version-1 manifest, which
+predates the backend fields, is read as the vfkit backend on
+`aarch64-darwin` and refused on Linux.
 
 The manifest carries only three strategy primitives (`mount`,
 `materialize`, `socket`) with concrete parameters. The binary implements

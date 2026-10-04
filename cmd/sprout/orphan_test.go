@@ -5,35 +5,93 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
+func contractFor(t *testing.T, host, kind string, mutate func(backend map[string]any)) *Manifest {
+	t.Helper()
+	doc := v2ManifestDoc(host, kind)
+	if mutate != nil {
+		mutate(doc["backend"].(map[string]any))
+	}
+	m, err := parseManifest(encodeDoc(t, doc), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func socketsFor(t *testing.T, sockDir string, m *Manifest) instanceSockets {
+	t.Helper()
+	socks, err := resolveInstanceSockets(sockDir, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return socks
+}
+
 // Everything matchInstanceProcs returns gets killed, so it must find the
-// instance's vfkit by the socket path in its argv and nothing else: not another
-// instance's vfkit, not a process merely mentioning the directory, not itself.
-func TestMatchInstanceProcs(t *testing.T) {
+// instance's vfkit by the whole network argument the daemon substituted and
+// nothing else: not another instance's vfkit, not a process merely mentioning
+// the socket or the directory, not itself.
+func TestMatchInstanceProcsFindsVfkitByItsNetworkArgument(t *testing.T) {
 	const dir = "/state/sprout/instances/6a7f9b51b885"
-	fingerprint := instanceProcFingerprint(dir)
+	const sockDir = "/tmp/sprout-501/6a7f9b51b885"
+	m := contractFor(t, "aarch64-darwin", "vfkit", nil)
+	args := m.contract.orphanArgs(sockDir, dir)
 
 	ps := "" +
 		"  1 /sbin/launchd\n" +
-		"501 /nix/store/x/bin/vfkit --cpus 8 --device 'virtio-blk,path=var.img' --device 'virtio-net,unixSocketPath=/state/sprout/instances/6a7f9b51b885/net.sock,mac=02:00:00:00:00:02'\n" +
-		"502 /nix/store/x/bin/vfkit --device 'virtio-net,unixSocketPath=/state/sprout/instances/8b020ba20aef/net.sock,mac=02:00:00:00:00:02'\n" +
+		"501 /nix/store/x/bin/vfkit --cpus 8 --device virtio-blk,path=var.img --device virtio-net,unixSocketPath=/tmp/sprout-501/6a7f9b51b885/net.sock,mac=02:00:00:00:00:02\n" +
+		"502 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/tmp/sprout-501/8b020ba20aef/net.sock,mac=02:00:00:00:00:02\n" +
 		"503 tail -f /state/sprout/instances/6a7f9b51b885/runner.log\n" +
 		"504 sprout up -i feat-login\n" +
-		"777 /nix/store/x/bin/vfkit --device 'virtio-net,unixSocketPath=/state/sprout/instances/6a7f9b51b885/net.sock'\n"
+		"505 socat - UNIX-CONNECT:/tmp/sprout-501/6a7f9b51b885/net.sock\n" +
+		"506 grep unixSocketPath=/tmp/sprout-501/6a7f9b51b885/net.sock run.sh\n" +
+		"507 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/tmp/sprout-501/6a7f9b51b885/net.sock.old,mac=02:00:00:00:00:02\n" +
+		"508 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/state/sprout/instances/6a7f9b51b885/net.sock,mac=02:00:00:00:00:02\n" +
+		"509 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/tmp/sprout-501/6a7f9b51b885/net2.sock,mac=02:00:00:00:00:02\n" +
+		"510 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/tmp/sprout-501/6a7f9b51b885/sub/net.sock\n" +
+		"777 /nix/store/x/bin/vfkit --device virtio-net,unixSocketPath=/tmp/sprout-501/6a7f9b51b885/net.sock\n"
 
-	got := matchInstanceProcs(ps, fingerprint, 777)
-	if len(got) != 1 || got[0] != 501 {
-		t.Fatalf("matchInstanceProcs found %v, want only the instance's own vfkit [501] (777 is self)", got)
+	got := matchInstanceProcs(ps, args, 777)
+	want := []int{501, 508, 509}
+	if !slices.Equal(got, want) {
+		t.Fatalf("matchInstanceProcs found %v, want %v: the socket-dir runner, the legacy instance-dir runner, and a runner whose bundle named the socket differently (777 is self)", got, want)
+	}
+}
+
+func TestMatchInstanceProcsFindsQemuAndSidecarsByTheirSocketArguments(t *testing.T) {
+	const dir = "/state/sprout/instances/6a7f9b51b885"
+	const sockDir = "/tmp/sprout-1000/6a7f9b51b885"
+	m := contractFor(t, "x86_64-linux", "qemu", func(b map[string]any) {
+		b["sidecars"] = []any{map[string]any{"name": "virtiofsd-workspace", "exec": []any{"/nix/store/x/bin/virtiofsd"}, "ready": map[string]any{"socket": "fs-workspace.sock"}}}
+	})
+	args := m.contract.orphanArgs(sockDir, dir)
+
+	ps := "" +
+		"601 /nix/store/q/bin/qemu-system-x86_64 -M microvm -netdev stream,id=n0,server=off,addr.type=unix,addr.path=/tmp/sprout-1000/6a7f9b51b885/net.sock -device virtio-net-pci,netdev=n0\n" +
+		"602 /nix/store/v/bin/virtiofsd --socket-path=/tmp/sprout-1000/6a7f9b51b885/fs-workspace.sock --shared-dir=/src/app --sandbox=namespace\n" +
+		"603 /nix/store/q/bin/qemu-system-x86_64 -netdev stream,id=n0,addr.type=unix,addr.path=/tmp/sprout-1000/8b020ba20aef/net.sock\n" +
+		"604 tail -f /state/sprout/instances/6a7f9b51b885/runner.log\n" +
+		"605 socat - UNIX-CONNECT:/tmp/sprout-1000/6a7f9b51b885/vm-control.sock\n" +
+		"606 ls /tmp/sprout-1000/6a7f9b51b885/fs-workspace.sock /tmp/sprout-1000/6a7f9b51b885/net.sock\n" +
+		"607 /nix/store/v/bin/virtiofsd --socket-path=/tmp/sprout-1000/6a7f9b51b885/fs-workspace.sock.bak\n" +
+		"608 /nix/store/q/bin/qemu-system-x86_64 -netdev socket,id=n0,addr.path=/tmp/sprout-1000/6a7f9b51b885/net.sock\n" +
+		"609 /nix/store/v/bin/virtiofsd --socket-path=/tmp/sprout-1000/6a7f9b51b885/fs-old.sock --shared-dir=/src/app\n"
+
+	got := matchInstanceProcs(ps, args, 0)
+	if !slices.Equal(got, []int{601, 602, 609}) {
+		t.Fatalf("matchInstanceProcs found %v, want [601 602 609]: the instance's qemu and its sidecars only", got)
 	}
 }
 
 func TestMatchInstanceProcsIgnoresMalformedRows(t *testing.T) {
-	ps := "\n   \n?? /state/net.sock\n501\nnotapid /state/net.sock\n"
-	if got := matchInstanceProcs(ps, "/state/net.sock", 0); len(got) != 0 {
+	ps := "\n   \n?? --socket-path=/s/a.sock\n501\nnotapid --socket-path=/s/a.sock\n"
+	if got := matchInstanceProcs(ps, []argMatcher{socketArg("--socket-path", socketIn("/s"))}, 0); len(got) != 0 {
 		t.Errorf("malformed ps rows produced pids %v, want none", got)
 	}
 }
@@ -108,22 +166,23 @@ func TestAcquireBootLockTimesOutWithoutADaemon(t *testing.T) {
 	lock.Close()
 }
 
-// End to end over real processes: a survivor carrying the instance's socket is
-// gone once reapOrphans returns, an instance with nothing behind it is left
-// alone. Two survivors, one per fingerprint: the socket-directory path current
-// runners carry, and the instance-directory path an older sprout's carry. The
-// stand-in answers no REST socket, so the fall-through from the graceful stop
-// to signalling runs too.
+// End to end over real processes: a survivor carrying the instance's network
+// argument is gone once reapOrphans returns, an instance with nothing behind
+// it is left alone. Two survivors, one per argument form: the socket-directory
+// path current runners carry, and the instance-directory path an older
+// sprout's carry. The stand-in answers no REST socket, so the fall-through
+// from the graceful stop to signalling runs too.
 func TestReapOrphansKillsTheSurvivingVM(t *testing.T) {
 	dir, sockDir := t.TempDir(), t.TempDir()
-	m := &Manifest{RestSocket: "vfkit-rest.sock"}
+	m := contractFor(t, "aarch64-darwin", "vfkit", nil)
+	socks := socketsFor(t, sockDir, m)
 
-	if err := reapOrphans(dir, sockDir, m); err != nil {
+	if err := reapOrphans(dir, socks, m); err != nil {
 		t.Fatalf("reapOrphans with no leftovers failed: %v", err)
 	}
 
 	// A compound command keeps sh from exec'ing straight into sleep, which would
-	// drop the trailing argument that stands in for vfkit's socket path.
+	// drop the trailing argument that stands in for vfkit's network device.
 	startSurvivor := func(fingerprint string) chan struct{} {
 		survivor := exec.Command("/bin/sh", "-c", "sleep 300; :", fingerprint)
 		if err := survivor.Start(); err != nil {
@@ -136,10 +195,10 @@ func TestReapOrphansKillsTheSurvivingVM(t *testing.T) {
 		t.Cleanup(func() { _ = survivor.Process.Kill() })
 		return exited
 	}
-	current := startSurvivor(instanceProcFingerprint(sockDir))
-	legacy := startSurvivor(instanceProcFingerprint(dir))
+	current := startSurvivor("virtio-net,unixSocketPath=" + filepath.Join(sockDir, "net.sock") + ",mac=02:00:00:00:00:02")
+	legacy := startSurvivor("virtio-net,unixSocketPath=" + filepath.Join(dir, "net.sock") + ",mac=02:00:00:00:00:02")
 
-	if err := reapOrphans(dir, sockDir, m); err != nil {
+	if err := reapOrphans(dir, socks, m); err != nil {
 		t.Fatalf("reapOrphans failed: %v", err)
 	}
 	for name, exited := range map[string]chan struct{}{"current": current, "legacy": legacy} {

@@ -77,23 +77,41 @@ func startForeground(id *Identity) error {
 	}
 	// Loaded under the claim: before it binds the incarnation, a concurrent
 	// delete or `up` can replace the record.
-	inst, _, err := loadInstance(id.ID)
+	inst, err := loadBootRecord(id.ID, id.Display(), dir)
 	if err != nil {
 		lock.Close()
 		return err
 	}
-	// Lazy migration: a legacy record is resolved, pinned, and rewritten
-	// before anything reads the bundle.
-	if err := reconcileRoots(dir, inst); err != nil {
+	// Lazy migration: a legacy record is resolved here and pinned and
+	// rewritten below, only once its bundle has been accepted, so a refusal
+	// leaves the record and its root as they were.
+	canonical, err := canonicalBundlePath(inst.Bundle, inst.Name)
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	manifest, err := loadManifest(filepath.Join(canonical, "manifest.json"))
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	if err := checkInstancePlatform(id.Display(), inst.Platform, manifest.platform()); err != nil {
+		lock.Close()
+		return err
+	}
+	if err := manifest.contract.bootable(); err != nil {
+		lock.Close()
+		return err
+	}
+	if err := checkInstanceSocketPaths(id.ID, manifest); err != nil {
+		lock.Close()
+		return err
+	}
+	if err := pinRecordedBundle(dir, inst, canonical); err != nil {
 		lock.Close()
 		return err
 	}
 	lc.Close()
-	manifest, err := loadManifest(filepath.Join(inst.Bundle, "manifest.json"))
-	if err != nil {
-		lock.Close()
-		return err
-	}
 	return bootInstanceLocked(dir, inst, manifest, lock)
 }
 
@@ -131,7 +149,11 @@ func startDetached(selector string) error {
 		return err
 	}
 	// Check before detaching so a missing record is not reported only in the log.
-	if _, _, err := loadInstance(id.ID); err != nil {
+	dir, err := instanceDir(id.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := loadBootRecord(id.ID, id.Display(), dir); err != nil {
 		return err
 	}
 	return launchDetached(id, selector, startChildArgs(id.ID), "starting", "boot", false)

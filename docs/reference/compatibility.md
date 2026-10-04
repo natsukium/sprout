@@ -9,13 +9,19 @@ configuration may change between releases. Pin the flake input to a release
 or commit when a project needs a reproducible toolchain, and upgrade sprout
 together with its project configuration.
 
-The generated `manifest.json` and each `instance.json` carry an explicit
-schema version. This release writes and reads schema version 1. An unsupported
-version is rejected before a VM is started; remove the affected instance with
-`sprout delete -i ID --force`, then run `sprout up` after upgrading. VM `/var` data
-is not migrated by sprout, so
-back up important application data before deleting an instance or changing a
-guest definition.
+The generated `manifest.json`, each `instance.json`, and each `snapshot.json`
+carry an explicit schema version. This release writes version 2 of all three.
+It still reads version 1 on `aarch64-darwin`, the only host that could produce
+it, as the vfkit backend it always was, so existing Darwin bundles, instances,
+and snapshots keep working; elsewhere a version-1 manifest asks for a rebuild
+with a sprout flake that emits version 2, and a version-1 record asks for a
+delete. A newer version is rejected before a VM is started with a request to
+upgrade sprout. Records also name the host, guest, and backend that created
+the disk, and reusing one under a different combination is refused (see
+[reusing a disk](instance-state.md#reusing-a-disk)); remove the affected
+instance with `sprout delete -i ID --force`, then run `sprout up`. VM `/var`
+data is not migrated by sprout, so back up important application data before
+deleting an instance or changing a guest definition.
 
 The version alone does not catch every skew: a bundle built from a newer
 flake can name a cache scope or credential strategy the installed binary has

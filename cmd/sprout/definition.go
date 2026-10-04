@@ -67,14 +67,11 @@ func hostNixSystemFor(goos, goarch string) (string, error) {
 }
 
 func requireBootableHost() error {
-	return bootableHostFor(runtime.GOOS)
-}
-
-func bootableHostFor(goos string) error {
-	if goos == "darwin" {
-		return nil
+	host, err := hostNixSystem()
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("sprout cannot boot VMs on %s yet: Linux bundles build, but the QEMU/KVM backend that boots them is not implemented", goos)
+	return bootableHostFor(host)
 }
 
 func listDefinitions(flakeRef string) ([]string, error) {

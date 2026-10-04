@@ -322,16 +322,12 @@ func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m := &Manifest{Version: manifestSchemaVersion}
-	m.Guest.IP = "127.0.0.1"
-	m.Guest.SSHUser = "sprout"
-	if err := writeJSON(filepath.Join(bundle, "manifest.json"), m); err != nil {
-		t.Fatal(err)
-	}
+	writeHostManifest(t, bundle)
+	withBootableHostBackend(t)
 	// The record's bundle matches the one being booted, so the post-handoff
 	// re-check must settle on "already running" rather than a reboot.
 	if err := writeJSON(filepath.Join(dir, "instance.json"), &Instance{
-		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1",
+		ID: id, Name: "webapp", KeySource: "directory", Bundle: bundle, GuestIP: "127.0.0.1", Platform: hostPlatform(t),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -346,11 +342,8 @@ func TestUpForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	}
 }
 
-func bootManifest() *Manifest {
-	m := &Manifest{Version: manifestSchemaVersion}
-	m.Guest.IP = "127.0.0.1"
-	m.Guest.SSHUser = "sprout"
-	return m
+func bootManifest(t *testing.T) *Manifest {
+	return hostManifest(t)
 }
 
 func upIdentity(root, id string) *Identity {
@@ -382,7 +375,7 @@ func TestPrepareUpBootCommitsTheRecordAndRetiresTheToken(t *testing.T) {
 	}
 
 	keepToken := false
-	lock, inst, err := prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(), 0, &keepToken)
+	lock, inst, err := prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(t), 0, &keepToken)
 	if err != nil {
 		t.Fatalf("prepareUpBoot: %v", err)
 	}
@@ -434,7 +427,7 @@ func TestPrepareUpBootAbortsWhenTheInstanceWasRecreated(t *testing.T) {
 	}
 
 	keepToken := false
-	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(), 0, &keepToken)
+	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", bundle, bootManifest(t), 0, &keepToken)
 	if err == nil {
 		t.Fatal("a stale attempt booted into a recreated instance")
 	}
@@ -473,7 +466,7 @@ func TestPrepareUpBootKeepsTheTokenWhenReconcileFails(t *testing.T) {
 	recordPins(t, func(int) error { return pinFailed })
 
 	keepToken := false
-	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", storePath, bootManifest(), 0, &keepToken)
+	_, _, err = prepareUpBoot(upIdentity(root, id), dir, tok, "dev", storePath, bootManifest(t), 0, &keepToken)
 	if !errors.Is(err, pinFailed) {
 		t.Fatalf("prepareUpBoot error = %v, want the pin failure", err)
 	}

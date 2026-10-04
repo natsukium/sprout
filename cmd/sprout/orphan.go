@@ -56,15 +56,11 @@ func lockInstance(dir string, wait time.Duration, serving func() bool) (*os.File
 	}
 }
 
-// The runner bakes this path into vfkit's --device virtio-net argument, so it
-// identifies the process by what it is rather than by a reusable pid. Not the
-// runner script's path: that would also match a pager opened on the script,
-// and this fingerprint decides what gets killed.
-func instanceProcFingerprint(sockDir string) string {
-	return filepath.Join(sockDir, netSocketName)
-}
-
-func matchInstanceProcs(psOut, fingerprint string, self int) []int {
+// A process is matched by a whole argument the daemon substituted into it, so
+// it is identified by what it is rather than by a reusable pid. Not a
+// substring of the command line: that would also match a pager on the runner
+// log or anything else naming the socket, and this decides what gets killed.
+func matchInstanceProcs(psOut string, args []argMatcher, self int) []int {
 	var pids []int
 	for _, line := range strings.Split(psOut, "\n") {
 		pidField, command, ok := strings.Cut(strings.TrimSpace(line), " ")
@@ -75,27 +71,36 @@ func matchInstanceProcs(psOut, fingerprint string, self int) []int {
 		if err != nil || pid == self {
 			continue
 		}
-		if strings.Contains(command, fingerprint) {
+		if commandHasArg(command, args) {
 			pids = append(pids, pid)
 		}
 	}
 	return pids
 }
 
+// ps joins argv with spaces; every argument matched here was substituted
+// from runnerSafeValue, which has none.
+func commandHasArg(command string, args []argMatcher) bool {
+	for _, field := range strings.Fields(command) {
+		for _, match := range args {
+			if match(field) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Only valid while holding the instance lock, which is what proves the
 // processes found are orphans and not a live sibling boot. Reclaimed rather
 // than refused: no VM here is worth preserving, and refusing would only ask
 // the user to run the kill sprout is already positioned to run.
-func reapOrphans(dir, sockDir string, m *Manifest) error {
+func reapOrphans(dir string, socks instanceSockets, m *Manifest) error {
 	psOut, err := exec.Command("ps", "-axo", "pid=,command=").Output()
 	if err != nil {
 		return fmt.Errorf("scanning for leftover VM processes: %w", err)
 	}
-	pids := matchInstanceProcs(string(psOut), instanceProcFingerprint(sockDir), os.Getpid())
-	// Runners from a sprout that predates the socket directory carry the
-	// instance directory's path instead; matched too, or an upgraded sprout
-	// could not reclaim what an older one's crash left behind.
-	pids = append(pids, matchInstanceProcs(string(psOut), instanceProcFingerprint(dir), os.Getpid())...)
+	pids := matchInstanceProcs(string(psOut), m.contract.orphanArgs(socks.dir, dir), os.Getpid())
 	if len(pids) == 0 {
 		return nil
 	}
@@ -103,8 +108,8 @@ func reapOrphans(dir, sockDir string, m *Manifest) error {
 
 	// gracefulStop's ladder, with shorter waits: a user is watching a boot and
 	// the VM being drained is already unreachable.
-	if restSock, err := socketPathIn(sockDir, m.RestSocket); err == nil {
-		if err := vfkitRestState(restSock, "Stop"); err == nil {
+	if ctl := m.contract.control; ctl != nil {
+		if err := ctl.requestStop(socks.vmControl, false); err == nil {
 			if waitProcsGone(pids, 15*time.Second) {
 				return nil
 			}

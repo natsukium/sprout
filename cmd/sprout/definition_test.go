@@ -148,16 +148,6 @@ func TestCheckOutputShape(t *testing.T) {
 	}
 }
 
-// Linux hosts are refused until a Linux backend boots guests.
-func TestBootableHostFor(t *testing.T) {
-	if err := bootableHostFor("darwin"); err != nil {
-		t.Errorf("darwin rejected: %v", err)
-	}
-	if err := bootableHostFor("linux"); err == nil || !strings.Contains(err.Error(), "QEMU/KVM") {
-		t.Errorf("linux = %v, want a not-yet-implemented refusal naming the backend", err)
-	}
-}
-
 // Both failure modes share nix's "does not provide attribute" wording, but a
 // missing sproutConfigurations output means "no VMs defined" while a missing
 // attribute deeper in the flake is a real error the user must see.
