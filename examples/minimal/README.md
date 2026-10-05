@@ -9,16 +9,16 @@ $ sprout up
 building and booting "main" in the background (log: …/up.log) …
 VM ready. Enter it with: sprout shell
 $ sprout exec -- uname -a
-Linux sprout-dev 6.x.x … aarch64 GNU/Linux
+Linux sprout-dev 6.x.x … aarch64 GNU/Linux     # x86_64 on an x86_64 Linux host
 $ sprout delete
 ```
 
 The result is a NixOS system with systemd, sshd, and the repository mounted at
 `/workspace`. The instance is named after the current branch; its guest hostname
-is `sprout-dev`, after the `sprout.vms.dev` definition. The first `sprout up` uses the
-`aarch64-linux` builder described in the [build
-notes](../README.md#building-on-apple-silicon); later boots reuse the cached
-closure.
+is `sprout-dev`, after the `sprout.vms.dev` definition. The first `sprout up` builds
+the guest, on a Mac through the `aarch64-linux` builder described in the
+[build notes](../README.md#building-on-apple-silicon) and on Linux locally;
+later boots reuse the cached closure.
 
 If anything fails before the VM boots, run `sprout doctor`: it checks every
 prerequisite and prints the fix.

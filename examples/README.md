@@ -17,7 +17,7 @@ use standard container tooling; Nix configures the guest, not the stack.
 
 ## Building on Apple Silicon
 
-A sprout guest is an `aarch64-linux` NixOS closure, so a Mac cannot build it
+On a Mac the guest is an `aarch64-linux` NixOS closure, which macOS cannot build
 natively. You need an `aarch64-linux` builder Nix can reach. The quickest
 path, with no extra tooling, is nixpkgs'
 [`darwin.linux-builder`](https://nixos.org/manual/nixpkgs/stable/#sec-darwin-builder):
@@ -27,10 +27,18 @@ managed service through its `nix.linux-builder` option. A remote Linux
 machine in `/etc/nix/machines`, or a Linux CI runner (for example a Linux
 GitHub Actions runner) building the VM for you, also works.
 
-CI pushes every example's guest closure and the `sprout` CLI to the project
-binary cache on each push to `main`, so a checkout of `main` fetches the heavy
-closures (k3s pulls in a lot) instead of building them. Add the cache to your
-Nix settings:
+## Building on Linux
+
+On a Linux host the guest has the host's architecture, so Nix builds it
+locally and no builder setup is needed.
+
+## The binary cache
+
+CI pushes the `sprout` CLI and guest closures to the project binary cache on
+each push to `main`: every example's guest for Apple Silicon hosts, and the
+minimal example's guest for `aarch64-linux` and `x86_64-linux` hosts. A
+checkout of `main` then fetches those heavy closures (k3s pulls in a lot)
+instead of building them. Add the cache to your Nix settings:
 
 ```
 extra-substituters = https://nix-cache.natsukium.com
@@ -38,10 +46,11 @@ extra-trusted-public-keys = niks3-1:SoIFTPtiPoCW3/OzUkIBKlLG5znMZfbihlr11XAOles=
 ```
 
 On a multi-user Nix install these lines belong in the system configuration
-(`/etc/nix/nix.conf`, or nix-darwin's `nix.settings`): Nix ignores
+(`/etc/nix/nix.conf`, or `nix.settings` in nix-darwin or NixOS): Nix ignores
 substituters added by a user it does not trust. A cache hit requires the same
 evaluation CI ran, so it covers the examples as committed; once you change an
-example or its inputs, the builder above takes over.
+example or its inputs, Nix builds them again (through the builder above, on a
+Mac).
 
 ## The stack
 
@@ -64,7 +73,8 @@ $ sprout shell              # then start the stack — see the example's README
 The podman example runs `podman-compose up`; the k3s example runs `skaffold
 run` (or `skaffold dev` for a live rebuild loop). Once the stack is up, forward
 the port it publishes — `sprout forward 8080` for podman, `sprout forward
---bind 0.0.0.0 80` for k3s — and add a few todos. They persist across `sprout
+--bind 0.0.0.0 80` for k3s on macOS, or `sprout forward 8081:80` on Linux,
+which by default refuses a non-root bind of port 80 — and add a few todos. They persist across `sprout
 stop` / `sprout up`, because the database volume lives on the guest's
 persistent `/var`. Delete the instance with `sprout delete`.
 

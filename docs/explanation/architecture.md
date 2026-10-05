@@ -1,7 +1,7 @@
 # Architecture: Nix defines, Go executes
 
-Each instance uses one static Go binary instead of a gvproxy process, a vfkit
-wrapper, and a separate supervisor. Nix owns the VM definition; Go owns the
+Each instance uses one static Go binary instead of a gvproxy process, a
+hypervisor wrapper, and a separate supervisor. Nix owns the VM definition; Go owns the
 runtime.
 
 ## The seam
@@ -80,10 +80,14 @@ as a `nix develop` shell hook: both execute code from the current flake.
 sprout up                                          ← returns once the VM is ready
  └─ sprout up --foreground (detached child)         = the daemon, one per instance
      ├─ embeds gvisor-tap-vsock as a library   ← networking, port forwards
-     ├─ supervises the microvm.nix vfkit runner ← Nix owns the definition
-     │   └─ PTY handling for the serial console (macOS 26 workaround)
+     ├─ supervises the microvm.nix runner      ← Nix owns the definition
+     │   ├─ vfkit: PTY handling for the serial console (macOS 26 workaround)
+     │   └─ QEMU: one virtiofsd sidecar per share, started first
      └─ control socket                          ← ssh/forward/stop talk here
 ```
+
+The runner is vfkit on macOS and QEMU on Linux; the rest of the tree is the
+same on both.
 
 `up` re-execs itself with `--foreground` and waits only for readiness, so the
 command you typed returns to the prompt while the daemon it left behind owns
@@ -138,22 +142,26 @@ The guest crosses the VM boundary through these paths:
   (`storeOnDisk = false`), so mounting it is what lets one build boot without
   packing a disk image per guest change. `writableStore` overlays guest
   writes onto the instance's own `/var` volume; nothing written through it
-  reaches the host store. The remount caveat below applies here with one
-  sharpening: a multi-user Nix store is root-owned, so a guest that remounts
-  the share writable still cannot alter it, but a single-user install's
-  store belongs to the same user the VM process runs as, and a compromised
-  guest could then tamper with store paths the host user later executes.
+  reaches the host store. Under QEMU the store's `virtiofsd` refuses writes
+  itself. Under vfkit the remount caveat below applies, with one sharpening:
+  a multi-user Nix store is root-owned, so a guest that remounts the share
+  writable still cannot alter it, but a single-user install's store belongs
+  to the same user the VM process runs as, and a compromised guest could
+  then tamper with store paths the host user later executes.
 - **The per-instance data directory**, mounted at `/run/sprout`: the SSH
   `authorized_keys`, `instance.env`, and any materialized credentials the
   definition declares. The host writes it at boot; it exists so per-instance
   values reach the guest without being baked into the shared build.
-- **The declared shares**, with a caveat on macOS: virtiofs carries no
-  read-only flag there, so `readOnly` is enforced by the guest's own mount
-  options. Root inside the guest can remount and write, so on macOS treat
-  `readOnly` as protection against accidents, not against a compromised
-  guest, and prefer `materialize` or `socket` for credentials the guest must
-  never alter. Under QEMU the share's `virtiofsd` refuses writes itself
-  (`--readonly`), which a remount inside the guest cannot lift.
+- **The declared shares**, where `readOnly` is enforced differently per
+  backend. Under QEMU (Linux) the share's `virtiofsd` runs with
+  `--readonly` and refuses writes on the host side, which a remount inside
+  the guest cannot lift. Under vfkit (macOS) the virtio-fs device carries no
+  read-only flag, so `readOnly` is only the guest's own mount option: root
+  inside the guest can remount and write. On macOS, treat `readOnly` as
+  protection against accidents, not against a compromised guest, and prefer
+  `materialize` or `socket` for credentials the guest must never alter.
+  Writable shares are written as the host user on both: vfkit runs as that
+  user, and each `virtiofsd` maps every guest uid onto it.
   `workspace = true` mounts two of them: the worktree at `/workspace`, and
   the clone's git-common-dir, which a linked worktree's `.git` file points
   at. Guest git works because of the second share, and it is also why guest

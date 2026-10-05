@@ -5,11 +5,11 @@ where the expensive state lives: a booted k3s cluster, a seeded database, a
 warm build tree. `sprout snapshot` saves that volume so you can return to it, and
 `sprout fork` hands it to another environment.
 
-On a filesystem with copy-on-write clones (APFS, where macOS keeps its system
-and default data volumes), both take single-digit milliseconds and no
-additional disk until written, even for a 40 GiB volume; see [when it is not
-instant](#when-it-is-not-instant) for the fallback on filesystems without
-them.
+Where the state directory's filesystem can clone the volume copy-on-write
+(APFS on macOS, where macOS keeps its system and default data volumes; XFS
+on Linux), both take single-digit milliseconds and no additional disk until
+written, even for a 40 GiB volume. Elsewhere, ext4 and btrfs included, they
+make a full copy; see [when it is not instant](#when-it-is-not-instant).
 
 ## Save a rollback point
 
@@ -128,8 +128,12 @@ du -sh "${XDG_STATE_HOME:-$HOME/.local/state}/sprout"
 Copy-on-write clones are a filesystem feature, and a per-volume one: macOS
 formats its own volumes as APFS, but a state directory placed on an external
 or network volume with another filesystem has no clones, and neither does a
-clone that would cross volume boundaries. On Linux they need btrfs, XFS,
-bcachefs, or OpenZFS 2.2+; ext4 has no equivalent. Without them, sprout falls
+clone that would cross volume boundaries. On Linux sprout asks for a reflink
+(the `FICLONE` ioctl), which XFS created with reflink support (the `mkfs.xfs`
+default) provides and ext4 does not. btrfs supports reflinks but not for
+this file: the runner marks a new `var.img` No_COW (`chattr +C`, visible in
+`lsattr`) when it creates it, and btrfs refuses to clone a No_COW file, so on
+btrfs every snapshot and fork is a full copy. Without a clone, sprout falls
 back to a hole-skipping copy that is correct but takes real time and real
 disk. It tells you which path it took:
 

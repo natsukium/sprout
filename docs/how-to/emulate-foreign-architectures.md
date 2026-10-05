@@ -1,9 +1,12 @@
 # Emulate a foreign architecture
 
-On Apple Silicon the guest is `aarch64-linux`, so a binary or container
-image built only for `x86_64-linux` does not run natively. The guest kernel
-can run such binaries through QEMU user emulation. Declare the emulated
-systems in the VM definition:
+The guest has the host's CPU architecture: `aarch64-linux` on Apple Silicon
+and on an `aarch64` Linux host, `x86_64-linux` on an `x86_64` one. A binary or
+container image built only for the other architecture does not run natively,
+and sprout boots no guest of a foreign architecture. The guest kernel can
+still run such binaries through QEMU user emulation. Declare the emulated
+systems in the VM definition. The examples below are for an `aarch64` guest;
+on an `x86_64` guest, swap in `"aarch64-linux"` and `linux/arm64`:
 
 ```nix
 sprout.vms.dev.modules = [
