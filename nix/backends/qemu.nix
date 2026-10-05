@@ -24,17 +24,21 @@ let
   # By index: tags embed freeform credential and cache names, which can break
   # the socket-name rule or overflow sun_path.
   shareSocket = i: "fs-${toString i}.sock";
-  placedShares = lib.imap0 (
-    i: s:
-    {
-      cache = "auto";
-      extraArgs = [ ];
-    }
-    // s
-    // {
-      socket = socketPlaceholder (shareSocket i);
-    }
-  ) shares;
+  placedShares = lib.imap0 (i: s: s // { socket = socketPlaceholder (shareSocket i); }) shares;
+
+  # What a sidecar is built from, with microvm.nix's defaults filled in;
+  # older microvm.nix releases have no extraArgs option at all.
+  sidecarFieldsOf = s: {
+    inherit (s)
+      proto
+      tag
+      socket
+      source
+      readOnly
+      ;
+    cache = s.cache or "auto";
+    extraArgs = s.extraArgs or [ ];
+  };
 
   hostId = {
     uid = placeholderFor "host" "uid";
@@ -44,31 +48,28 @@ let
   # Rootless virtiofsd gets no uid 0 in its namespace, so guest ids are
   # squashed onto the host user's: untranslated, any chown by guest root
   # into a share fails with EINVAL.
-  sidecars = lib.imap0 (i: s: {
-    name = "virtiofsd-${s.tag}";
-    exec = [
-      "${hostPkgs.virtiofsd}/bin/virtiofsd"
-      "--socket-path=${s.socket}"
-      "--shared-dir=${s.source}"
-      "--sandbox=namespace"
-      "--cache=${s.cache}"
-      "--translate-uid=squash-guest:0:${hostId.uid}:4294967295"
-      "--translate-gid=squash-guest:0:${hostId.gid}:4294967295"
-    ]
-    ++ lib.optional s.readOnly "--readonly"
-    ++ s.extraArgs;
-    ready.socket = shareSocket i;
-  }) placedShares;
+  sidecars = lib.imap0 (
+    i: share:
+    let
+      s = sidecarFieldsOf share;
+    in
+    {
+      name = "virtiofsd-${s.tag}";
+      exec = [
+        "${hostPkgs.virtiofsd}/bin/virtiofsd"
+        "--socket-path=${s.socket}"
+        "--shared-dir=${s.source}"
+        "--sandbox=namespace"
+        "--cache=${s.cache}"
+        "--translate-uid=squash-guest:0:${hostId.uid}:4294967295"
+        "--translate-gid=squash-guest:0:${hostId.gid}:4294967295"
+      ]
+      ++ lib.optional s.readOnly "--readonly"
+      ++ s.extraArgs;
+      ready.socket = shareSocket i;
+    }
+  ) placedShares;
 
-  sidecarFields = [
-    "proto"
-    "tag"
-    "socket"
-    "source"
-    "readOnly"
-    "cache"
-    "extraArgs"
-  ];
 in
 {
   shares = placedShares;
@@ -135,8 +136,8 @@ in
           # altered through `modules` would leave QEMU dialing a socket nobody
           # serves, or serve it with the original source and permissions.
           assertion =
-            map (lib.getAttrs sidecarFields) (lib.filter (s: s.proto == "virtiofs") config.microvm.shares)
-            == map (lib.getAttrs sidecarFields) placedShares;
+            map sidecarFieldsOf (lib.filter (s: s.proto == "virtiofs") config.microvm.shares)
+            == map sidecarFieldsOf placedShares;
           message = "sprout: the qemu backend serves only the shares sprout declares; set them through sprout.vms.<name> (workspace, credentials, caches), not microvm.shares";
         }
       ];
