@@ -15,7 +15,7 @@ import (
 )
 
 func manifestFrom(subs [][2]string) *Manifest {
-	m := &Manifest{}
+	m := &Manifest{contract: &backendContract{}}
 	for _, s := range subs {
 		m.Substitutions = append(m.Substitutions, struct {
 			Placeholder string `json:"placeholder"`
@@ -33,7 +33,7 @@ func runRewrite(t *testing.T, runner string, m *Manifest, values map[string]stri
 	if err := os.WriteFile(in, []byte(runner), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := rewriteRunner(in, m, values, out); err != nil {
+	if _, err := rewriteRunner(in, m, values, out); err != nil {
 		return "", err
 	}
 	got, err := os.ReadFile(out)
@@ -66,6 +66,28 @@ func TestRewriteRunner(t *testing.T) {
 		m := manifestFrom([][2]string{{"@X@", "sym"}})
 		if _, err := runRewrite(t, "no placeholder here", m, map[string]string{"sym": "v"}); err == nil {
 			t.Fatal("want error for missing placeholder")
+		}
+	})
+
+	// Under QEMU a share's source is named only by its virtiofsd, never by
+	// the runner.
+	t.Run("placeholder only in a sidecar is substituted there", func(t *testing.T) {
+		m := manifestFrom([][2]string{{"@WS@", "workspace"}, {"@NET@", "netSocket"}})
+		m.contract.sidecars = []SidecarSpec{{Name: "fs", Exec: []string{"/bin/virtiofsd", "--shared-dir=@WS@"}}}
+		dir := t.TempDir()
+		in := filepath.Join(dir, "runner")
+		if err := os.WriteFile(in, []byte("run @NET@"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sidecars, err := rewriteRunner(in, m, map[string]string{"workspace": "/home/u/ws", "netSocket": "/n.sock"}, filepath.Join(dir, "run.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := sidecars[0].Exec[1]; got != "--shared-dir=/home/u/ws" {
+			t.Fatalf("sidecar arg = %q", got)
+		}
+		if m.contract.sidecars[0].Exec[1] != "--shared-dir=@WS@" {
+			t.Fatal("the manifest's own sidecar spec was rewritten in place")
 		}
 	})
 
@@ -163,7 +185,7 @@ func TestRewriteRunnerProperties(t *testing.T) {
 		if err := os.WriteFile(in, []byte(runner.String()), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := rewriteRunner(in, m, values, out); err != nil {
+		if _, err := rewriteRunner(in, m, values, out); err != nil {
 			t.Fatalf("rewriteRunner: %v", err)
 		}
 		data, err := os.ReadFile(out)

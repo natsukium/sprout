@@ -49,18 +49,6 @@ func TestManifestTransportSelectsItsWireProtocol(t *testing.T) {
 	}
 }
 
-// Every qemu operation is registered, but its virtiofs shares still need
-// sidecars sprout does not supervise, so the kind must stay unbootable.
-func TestQemuStaysUnbootableWithoutSidecarSupervision(t *testing.T) {
-	k := lookupBackendKind("qemu")
-	if networkTransports[k.vocabulary.network] == nil || controlProtocols[k.vocabulary.control] == nil || consoleModes[k.vocabulary.console] == nil {
-		t.Fatal("a qemu operation is not registered")
-	}
-	if k.implemented() {
-		t.Fatal("qemu reported implemented without sidecar supervision")
-	}
-}
-
 const (
 	testGuestIP  = "192.168.127.2"
 	testGuestMAC = "5a:94:ef:e4:0c:ee"

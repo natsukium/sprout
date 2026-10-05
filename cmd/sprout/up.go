@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -581,6 +582,8 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 		"workspace":  inst.Workspace,
 		"gitCommon":  inst.RepoRoot,
 		"consolePty": "virtio-serial,pty",
+		"hostUid":    strconv.Itoa(os.Getuid()),
+		"hostGid":    strconv.Itoa(os.Getgid()),
 	}
 	for name, path := range socks.named {
 		subs["socket:"+name] = path
@@ -603,7 +606,8 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 		return err
 	}
 	runScript := filepath.Join(dir, "run.sh")
-	if err := rewriteRunner(filepath.Join(inst.Bundle, "runner"), manifest, subs, runScript); err != nil {
+	sidecars, err := rewriteRunner(filepath.Join(inst.Bundle, "runner"), manifest, subs, runScript)
+	if err != nil {
 		return err
 	}
 
@@ -612,7 +616,7 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 		return err
 	}
 
-	return runDaemon(dir, inst, manifest, runScript, socks)
+	return runDaemon(dir, inst, manifest, runScript, sidecars, socks)
 }
 
 // The short paths (see socketdir.go), resolved before anything boots so an
@@ -700,16 +704,18 @@ func loadManifest(path string) (*Manifest, error) {
 // The class is what nixpkgs' escapeShellArg leaves unquoted.
 var runnerSafeValue = regexp.MustCompile(`^[[:alnum:],._+:@%/=-]+$`)
 
-// Substituting text rather than re-deriving vfkit arguments keeps the runner
-// a pure microvm.nix artifact shared by every instance.
+// Substituting text rather than re-deriving backend arguments keeps the
+// runner a pure microvm.nix artifact shared by every instance. Sidecars are
+// substituted the same way: under QEMU a share's source appears only in its
+// virtiofsd argv, never in the runner.
 //
 // One pass, longest placeholder first: sequential replacement would corrupt a
 // placeholder that is a prefix of another (".../credential/aws" vs
 // ".../credential/aws-extra"), the shorter one hiding the longer.
-func rewriteRunner(runnerPath string, m *Manifest, subs map[string]string, out string) error {
+func rewriteRunner(runnerPath string, m *Manifest, subs map[string]string, out string) ([]SidecarSpec, error) {
 	content, err := os.ReadFile(runnerPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Validated against untouched content, so a prefix collision cannot make a
 	// valid placeholder look missing.
@@ -718,13 +724,13 @@ func rewriteRunner(runnerPath string, m *Manifest, subs map[string]string, out s
 	for _, s := range m.Substitutions {
 		value, ok := subs[s.Value]
 		if !ok {
-			return fmt.Errorf("manifest requests unknown substitution symbol %q (sprout too old for this flake?)", s.Value)
+			return nil, fmt.Errorf("manifest requests unknown substitution symbol %q (sprout too old for this flake?)", s.Value)
 		}
 		if !runnerSafeValue.MatchString(value) {
-			return fmt.Errorf("%s resolves to %q, which the runner script cannot carry; use a path of alphanumerics and ,._+:@%%/=-", s.Value, value)
+			return nil, fmt.Errorf("%s resolves to %q, which the runner script cannot carry; use a path of alphanumerics and ,._+:@%%/=-", s.Value, value)
 		}
-		if !bytes.Contains(content, []byte(s.Placeholder)) {
-			return fmt.Errorf("placeholder %q not found in runner script", s.Placeholder)
+		if !bytes.Contains(content, []byte(s.Placeholder)) && !sidecarsMention(m.contract.sidecars, s.Placeholder) {
+			return nil, fmt.Errorf("placeholder %q appears in neither the runner script nor any sidecar", s.Placeholder)
 		}
 		pairs = append(pairs, pair{s.Placeholder, value})
 	}
@@ -735,11 +741,33 @@ func rewriteRunner(runnerPath string, m *Manifest, subs map[string]string, out s
 	for _, p := range pairs {
 		oldnew = append(oldnew, p.placeholder, p.value)
 	}
-	rewritten := strings.NewReplacer(oldnew...).Replace(string(content))
-	return os.WriteFile(out, []byte(rewritten), 0o700)
+	r := strings.NewReplacer(oldnew...)
+	sidecars := make([]SidecarSpec, len(m.contract.sidecars))
+	for i, s := range m.contract.sidecars {
+		sidecars[i] = s
+		sidecars[i].Exec = make([]string, len(s.Exec))
+		for j, arg := range s.Exec {
+			sidecars[i].Exec[j] = r.Replace(arg)
+		}
+	}
+	if err := os.WriteFile(out, []byte(r.Replace(string(content))), 0o700); err != nil {
+		return nil, err
+	}
+	return sidecars, nil
 }
 
-func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks instanceSockets) error {
+func sidecarsMention(sidecars []SidecarSpec, placeholder string) bool {
+	for _, s := range sidecars {
+		for _, arg := range s.Exec {
+			if strings.Contains(arg, placeholder) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sidecarSpecs []SidecarSpec, socks instanceSockets) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -772,6 +800,14 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	runtimeSocks := socks.runnerOwned(m)
 	removeSocketFiles(runtimeSocks)
 	defer removeSocketFiles(runtimeSocks)
+
+	sidecars, err := startSidecars(sidecarSpecs, socks, dir)
+	if err != nil {
+		return err
+	}
+	// After the runner has exited on every path below: a sidecar stopped
+	// first would pull a share from under a running guest.
+	defer sidecars.stop()
 
 	cmd := exec.Command(runScript)
 	cmd.Dir = dir
@@ -811,14 +847,33 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, socks 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	var lost *sidecar
 	select {
 	case sig := <-sigCh:
 		fmt.Printf("\nreceived %s, shutting down …\n", sig)
 		srv.stopOnce.Do(stop)
 		<-exit.done
+	case p := <-sidecars.exited():
+		// virtiofsd also exits the moment QEMU disconnects, which can be seen
+		// before QEMU's own exit: only a sidecar the runner outlives is lost.
+		if !exit.within(sidecarLostGrace) {
+			lost = p
+			srv.stopOnce.Do(stop)
+			<-exit.done
+		}
 	case <-exit.done:
 	}
 	err = exit.err
+
+	if lost != nil {
+		failure := sidecars.failure(lost, fmt.Sprintf("exited while the VM was running: %v", lost.exit.err))
+		if !srv.ready.Load() {
+			return failure
+		}
+		fmt.Fprintln(os.Stderr, failure)
+		fmt.Printf("instance %q stopped\n", inst.Name)
+		return nil
+	}
 
 	// Normal shutdowns (a control-socket stop, guest poweroff) also exit
 	// non-zero, so only unexpected failures are reported.

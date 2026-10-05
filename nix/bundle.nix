@@ -63,8 +63,13 @@ let
       # accept combinations the runners cannot boot.
       guestSystem = systems.guestFor hostSystem;
       backend = backends.${systems.resolveBackend hostSystem vmCfg.backend} {
-        inherit guest mem;
-        socketPlaceholder = placeholderFor "sock";
+        inherit
+          guest
+          mem
+          hostPkgs
+          placeholderFor
+          ;
+        shares = baseShares;
       };
       mem = parseSize vmCfg.mem;
       # Which fields a credential needs depends on its strategy, so entry.nix
@@ -87,12 +92,13 @@ let
       hostCaches = lib.filterAttrs (_: c: c.scope != "instance") caches;
       instanceCaches = lib.filterAttrs (_: c: c.scope == "instance") caches;
 
-      mkPlaceholderMounts = kind: tagPrefix: guestPath: attrs: {
+      mkPlaceholderMounts = kind: tagPrefix: guestPath: readOnly: attrs: {
         shares = lib.mapAttrsToList (n: c: {
           proto = "virtiofs";
           tag = "${tagPrefix}-${n}";
           source = placeholderFor kind n;
           mountPoint = guestPath c;
+          readOnly = readOnly c;
         }) attrs;
         substitutions = lib.mapAttrsToList (n: _: {
           placeholder = placeholderFor kind n;
@@ -100,8 +106,47 @@ let
         }) attrs;
       };
 
-      credMounts = mkPlaceholderMounts "credential" "cred" (c: c.target) (credsFor "mount");
-      cacheMounts = mkPlaceholderMounts "cache" "cache" (c: c.guestPath) hostCaches;
+      credMounts = mkPlaceholderMounts "credential" "cred" (c: c.target) (c: c.readOnly) (
+        credsFor "mount"
+      );
+      cacheMounts = mkPlaceholderMounts "cache" "cache" (c: c.guestPath) (_: false) hostCaches;
+
+      baseShares = [
+        {
+          proto = "virtiofs";
+          tag = "ro-store";
+          source = "/nix/store";
+          mountPoint = "/nix/.ro-store";
+          readOnly = true;
+        }
+        {
+          # Per-instance data (SSH authorized_keys, materialized
+          # credentials), populated by `sprout` at boot.
+          proto = "virtiofs";
+          tag = "sprout-data";
+          source = placeholders.data;
+          mountPoint = dataMount;
+          readOnly = false;
+        }
+      ]
+      ++ lib.optionals vmCfg.workspace [
+        {
+          proto = "virtiofs";
+          tag = "workspace";
+          source = placeholders.workspace;
+          mountPoint = "/workspace";
+          readOnly = false;
+        }
+        {
+          proto = "virtiofs";
+          tag = "sprout-git";
+          source = placeholders.gitCommon;
+          mountPoint = gitCommonMount;
+          readOnly = false;
+        }
+      ]
+      ++ credMounts.shares
+      ++ cacheMounts.shares;
       cacheManifest = lib.mapAttrsToList (cname: c: {
         name = cname;
         inherit (c) scope;
@@ -147,38 +192,7 @@ let
               # not tmpfs: in-guest builds can exceed guest RAM, and store
               # paths built once should survive a stop/up cycle.
               writableStoreOverlay = lib.mkIf vmCfg.writableStore "/var/nix-rw-store";
-              shares = [
-                {
-                  proto = "virtiofs";
-                  tag = "ro-store";
-                  source = "/nix/store";
-                  mountPoint = "/nix/.ro-store";
-                }
-                {
-                  # Per-instance data (SSH authorized_keys, materialized
-                  # credentials), populated by `sprout` at boot.
-                  proto = "virtiofs";
-                  tag = "sprout-data";
-                  source = placeholders.data;
-                  mountPoint = dataMount;
-                }
-              ]
-              ++ lib.optionals vmCfg.workspace [
-                {
-                  proto = "virtiofs";
-                  tag = "workspace";
-                  source = placeholders.workspace;
-                  mountPoint = "/workspace";
-                }
-                {
-                  proto = "virtiofs";
-                  tag = "sprout-git";
-                  source = placeholders.gitCommon;
-                  mountPoint = gitCommonMount;
-                }
-              ]
-              ++ credMounts.shares
-              ++ cacheMounts.shares;
+              inherit (backend) shares;
 
               volumes = [
                 {

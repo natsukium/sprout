@@ -48,11 +48,22 @@ socket directory and substitutes as an absolute path for the shared
 placeholder `/sprout/placeholder/sock/<name>`; names must be a single path
 component and distinct from each other and from `control.sock`.
 
+Under QEMU every virtiofs share is served by its own `virtiofsd` sidecar,
+which the bundle declares with the same placeholders as the runner: a share's
+source appears only in its sidecar's arguments, so substitution covers both.
+The daemon starts the sidecars before the runner and holds the boot until
+each has created its socket; a sidecar that exits first fails the boot with
+its log tail. Each runs unprivileged in its own user namespace
+(`--sandbox=namespace`), with every guest uid and gid mapped to the host
+user, so files the guest creates or chowns stay the user's own. The sidecars
+die with the daemon however it exits, and one that exits while the guest
+runs stops the VM.
+
 Validation and boot are separate steps. A manifest whose kind this host
 cannot run is refused by name ("this bundle targets qemu on x86_64-linux;
 this sprout on aarch64-darwin supports vfkit"). A manifest that is valid for a
-backend whose operations this binary does not implement yet — `qemu`, today —
-is refused before any instance state is touched. A version-1 manifest, which
+backend whose operations this binary does not implement is refused before
+any instance state is touched. A version-1 manifest, which
 predates the backend fields, is read as the vfkit backend on
 `aarch64-darwin` and refused on Linux.
 
@@ -136,11 +147,13 @@ The guest crosses the VM boundary through these paths:
   `authorized_keys`, `instance.env`, and any materialized credentials the
   definition declares. The host writes it at boot; it exists so per-instance
   values reach the guest without being baked into the shared build.
-- **The declared shares**, with a caveat: virtiofs carries no read-only flag
-  on macOS, so `readOnly` is enforced by the guest's own mount options. Root
-  inside the guest can remount and write, so treat `readOnly` as protection
-  against accidents, not against a compromised guest, and prefer
-  `materialize` or `socket` for credentials the guest must never alter.
+- **The declared shares**, with a caveat on macOS: virtiofs carries no
+  read-only flag there, so `readOnly` is enforced by the guest's own mount
+  options. Root inside the guest can remount and write, so on macOS treat
+  `readOnly` as protection against accidents, not against a compromised
+  guest, and prefer `materialize` or `socket` for credentials the guest must
+  never alter. Under QEMU the share's `virtiofsd` refuses writes itself
+  (`--readonly`), which a remount inside the guest cannot lift.
   `workspace = true` mounts two of them: the worktree at `/workspace`, and
   the clone's git-common-dir, which a linked worktree's `.git` file points
   at. Guest git works because of the second share, and it is also why guest

@@ -121,16 +121,7 @@ func withBootableHostBackend(t *testing.T) {
 		if consoleModes[k.vocabulary.console] == nil {
 			restoreEntry(t, consoleModes, k.vocabulary.console, consoleMode(stubConsole{}))
 		}
-		if k.sharesNeedSidecars {
-			superviseSidecars(t)
-		}
 	}
-}
-
-func superviseSidecars(t *testing.T) {
-	prev := sidecarsSupervised
-	sidecarsSupervised = true
-	t.Cleanup(func() { sidecarsSupervised = prev })
 }
 
 func restoreEntry[T any](t *testing.T, m map[string]T, key string, v T) {
@@ -156,16 +147,13 @@ func TestParseManifestAcceptsEachBackendOnItsHost(t *testing.T) {
 	}
 }
 
-// The schema accepts qemu so its bundles validate today; what this sprout
-// cannot do is boot them, and that refusal names the backend.
-func TestQemuManifestValidatesButIsNotBootable(t *testing.T) {
+func TestQemuManifestIsBootable(t *testing.T) {
 	m, err := parseManifest(encodeDoc(t, v2ManifestDoc("x86_64-linux", "qemu")), "x86_64-linux")
 	if err != nil {
 		t.Fatalf("valid qemu manifest rejected: %v", err)
 	}
-	err = m.contract.bootable()
-	if err == nil || err.Error() != "the qemu backend is not implemented in this sprout yet" {
-		t.Fatalf("bootable() = %v, want the qemu not-implemented refusal", err)
+	if err := m.contract.bootable(); err != nil {
+		t.Fatalf("qemu manifest not bootable: %v", err)
 	}
 }
 
@@ -293,22 +281,6 @@ func TestParseManifestValidatesSidecars(t *testing.T) {
 	}
 }
 
-// A sidecar this sprout cannot supervise must refuse the boot, even for a
-// backend whose other operations exist.
-func TestManifestWithSidecarsIsNotBootable(t *testing.T) {
-	doc := v2ManifestDoc("aarch64-darwin", "vfkit")
-	doc["backend"].(map[string]any)["sidecars"] = []any{
-		map[string]any{"name": "a", "exec": []any{"/bin/a"}, "ready": map[string]any{"socket": "fs-a.sock"}},
-	}
-	m, err := parseManifest(encodeDoc(t, doc), "aarch64-darwin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := m.contract.bootable(); err == nil {
-		t.Fatal("manifest with sidecars reported bootable")
-	}
-}
-
 // Existing Darwin bundles predate v2; they must keep booting as the vfkit
 // contract they always were.
 func TestV1ManifestMigratesToVfkitOnDarwin(t *testing.T) {
@@ -350,28 +322,16 @@ func TestManifestFromANewerFlakeAsksToUpgrade(t *testing.T) {
 }
 
 func TestBootableHostFor(t *testing.T) {
-	if err := bootableHostFor("aarch64-darwin"); err != nil {
-		t.Errorf("aarch64-darwin rejected: %v", err)
-	}
-	for _, host := range []string{"x86_64-linux", "aarch64-linux"} {
-		err := bootableHostFor(host)
-		if err == nil || !strings.Contains(err.Error(), "the qemu backend is not implemented in this sprout yet") {
-			t.Errorf("%s = %v, want the qemu not-implemented refusal", host, err)
+	for _, host := range []string{"aarch64-darwin", "x86_64-linux", "aarch64-linux"} {
+		if err := bootableHostFor(host); err != nil {
+			t.Errorf("%s rejected: %v", host, err)
 		}
 	}
 }
 
 // Bootability is a registry fact: implementing every operation of a host's
-// kind, and supervising sidecars when its shares need them, is all it takes
-// to boot there.
+// kind is all it takes to boot there.
 func TestBootableHostFollowsTheRegistry(t *testing.T) {
-	restoreEntry(t, networkTransports, "qemu-stream", networkTransport(stubTransport{}))
-	restoreEntry(t, controlProtocols, "qmp", controlProtocol(stubControl{}))
-	restoreEntry(t, consoleModes, "stdio", consoleMode(stubConsole{}))
-	if err := bootableHostFor("x86_64-linux"); err == nil {
-		t.Fatal("linux bootable with qemu's sidecars still unsupervised")
-	}
-	superviseSidecars(t)
 	restoreEntry(t, consoleModes, "stdio", consoleMode(nil))
 	if err := bootableHostFor("x86_64-linux"); err == nil {
 		t.Fatal("linux bootable with the qemu console still missing")

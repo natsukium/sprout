@@ -122,12 +122,7 @@ type backendKind struct {
 	runnerArgs func(sockDir, instDir string) []argMatcher
 	// Optional: a hint for a runner failure only this kind can explain.
 	failureHint func(runnerOutput, instDir string) string
-	// The kind's shares exist only as sidecars, so it cannot boot while
-	// sidecarsSupervised is false, even from a manifest that lists none.
-	sharesNeedSidecars bool
 }
-
-var sidecarsSupervised = false
 
 var backendKinds = []*backendKind{
 	{
@@ -149,8 +144,7 @@ var backendKinds = []*backendKind{
 		runnerArgs: func(sockDir, _ string) []argMatcher {
 			return []argMatcher{deviceSocketArg("stream", "addr.path", socketIn(sockDir))}
 		},
-		failureHint:        qemuRunnerFailureHint,
-		sharesNeedSidecars: true,
+		failureHint: qemuRunnerFailureHint,
 	},
 }
 
@@ -185,8 +179,7 @@ func kindNames(kinds []*backendKind) string {
 }
 
 func (k *backendKind) implemented() bool {
-	return (!k.sharesNeedSidecars || sidecarsSupervised) &&
-		networkTransports[k.vocabulary.network] != nil &&
+	return networkTransports[k.vocabulary.network] != nil &&
 		controlProtocols[k.vocabulary.control] != nil &&
 		consoleModes[k.vocabulary.console] != nil
 }
@@ -312,7 +305,7 @@ func unknownVocabulary[T any](what, value string, known map[string]T) error {
 }
 
 func (c *backendContract) bootable() error {
-	if !c.kind.implemented() || (len(c.sidecars) > 0 && !sidecarsSupervised) {
+	if !c.kind.implemented() {
 		return notImplementedError(c.kind.name)
 	}
 	return nil

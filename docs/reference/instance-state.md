@@ -17,10 +17,12 @@
         ├── sock/control.sock         # daemon control socket (present while running)
         ├── sock/net.sock             # backend network socket into the embedded network stack
         ├── sock/vfkit-rest.sock      # backend control socket used by graceful stop (vm-control.sock, QMP, under QEMU)
+        ├── sock/fs-<n>.sock          # QEMU only: one virtiofsd sidecar socket per share (with virtiofsd's fs-<n>.sock.pid lock file)
         ├── daemon.lock               # held by the running daemon (see below)
         ├── up.log                    # stdout of the last detached `up`/`start`: build output and boot chatter
         ├── runner.log                # runner output (`sprout logs`; omitted there under QEMU, whose console.log is the same text)
         ├── console.log               # guest serial console (`sprout logs`)
+        ├── sidecars.log              # QEMU only: output of every virtiofsd sidecar, each line prefixed with its name
         ├── data/ssh/                 # authorized_keys, projected at boot
         ├── data/instance.env         # identity env file; guest path /run/sprout/instance.env (see below)
         ├── data/credentials/<name>   # materialized secrets; removed on daemon exit (after a SIGKILL or host crash, swept by the next `stop` or boot)

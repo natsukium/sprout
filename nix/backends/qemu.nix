@@ -1,11 +1,13 @@
-# Not bootable yet: the virtiofs sidecars are still missing. The manifest declares the whole contract regardless, so
-# a Linux bundle validates against the binary that will boot it.
 {
   guest,
   mem,
-  socketPlaceholder,
+  hostPkgs,
+  placeholderFor,
+  shares,
 }:
 let
+  inherit (hostPkgs) lib;
+  socketPlaceholder = placeholderFor "sock";
   network = "net.sock";
   control = "vm-control.sock";
   netdev = "sprout0";
@@ -18,8 +20,59 @@ let
   # reaches them. Low RAM equals the requested size up to 3 GiB, so 2048 MiB
   # is the only size with that layout.
   hangingMicrovmMem = 2048;
+
+  # By index: tags embed freeform credential and cache names, which can break
+  # the socket-name rule or overflow sun_path.
+  shareSocket = i: "fs-${toString i}.sock";
+  placedShares = lib.imap0 (
+    i: s:
+    {
+      cache = "auto";
+      extraArgs = [ ];
+    }
+    // s
+    // {
+      socket = socketPlaceholder (shareSocket i);
+    }
+  ) shares;
+
+  hostId = {
+    uid = placeholderFor "host" "uid";
+    gid = placeholderFor "host" "gid";
+  };
+
+  # Rootless virtiofsd gets no uid 0 in its namespace, so guest ids are
+  # squashed onto the host user's: untranslated, any chown by guest root
+  # into a share fails with EINVAL.
+  sidecars = lib.imap0 (i: s: {
+    name = "virtiofsd-${s.tag}";
+    exec = [
+      "${hostPkgs.virtiofsd}/bin/virtiofsd"
+      "--socket-path=${s.socket}"
+      "--shared-dir=${s.source}"
+      "--sandbox=namespace"
+      "--cache=${s.cache}"
+      "--translate-uid=squash-guest:0:${hostId.uid}:4294967295"
+      "--translate-gid=squash-guest:0:${hostId.gid}:4294967295"
+    ]
+    ++ lib.optional s.readOnly "--readonly"
+    ++ s.extraArgs;
+    ready.socket = shareSocket i;
+  }) placedShares;
+
+  sidecarFields = [
+    "proto"
+    "tag"
+    "socket"
+    "source"
+    "readOnly"
+    "cache"
+    "extraArgs"
+  ];
 in
 {
+  shares = placedShares;
+
   module =
     { config, lib, ... }:
     let
@@ -77,6 +130,15 @@ in
             )) config.microvm.qemu.extraArgs;
           message = "sprout: set memory through sprout.vms.<name>.mem and the machine through microvm.qemu.machine, not microvm.qemu.extraArgs";
         }
+        {
+          # Each share needs the sidecar generated from it; one added or
+          # altered through `modules` would leave QEMU dialing a socket nobody
+          # serves, or serve it with the original source and permissions.
+          assertion =
+            map (lib.getAttrs sidecarFields) (lib.filter (s: s.proto == "virtiofs") config.microvm.shares)
+            == map (lib.getAttrs sidecarFields) placedShares;
+          message = "sprout: the qemu backend serves only the shares sprout declares; set them through sprout.vms.<name> (workspace, credentials, caches), not microvm.shares";
+        }
       ];
     };
 
@@ -91,7 +153,7 @@ in
       socket = control;
     };
     console.mode = "stdio";
-    sidecars = [ ];
+    inherit sidecars;
   };
 
   substitutions = [
@@ -103,5 +165,17 @@ in
       placeholder = socketPlaceholder control;
       value = "socket:${control}";
     }
-  ];
+    {
+      placeholder = hostId.uid;
+      value = "hostUid";
+    }
+    {
+      placeholder = hostId.gid;
+      value = "hostGid";
+    }
+  ]
+  ++ lib.imap0 (i: _: {
+    placeholder = socketPlaceholder (shareSocket i);
+    value = "socket:${shareSocket i}";
+  }) placedShares;
 }

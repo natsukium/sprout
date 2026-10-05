@@ -33,9 +33,10 @@ sprout.vms.dev.credentials.aws = {
 };
 ```
 
-`readOnly` is enforced by the guest's own mount options, because virtiofs on
-macOS has no host-side read-only flag. That stops accidents, not a hostile
-guest: root inside the guest can remount and write. For credentials the
+On macOS `readOnly` is enforced by the guest's own mount options, because
+virtiofs there has no host-side read-only flag. That stops accidents, not a
+hostile guest: root inside the guest can remount and write. On Linux the
+share's `virtiofsd` refuses the writes itself, which a remount cannot lift. For credentials the
 guest must never alter, prefer `materialize` or `socket`; see [what the
 guest can reach](../explanation/architecture.md#what-the-guest-can-reach).
 
