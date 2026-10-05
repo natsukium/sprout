@@ -49,6 +49,20 @@ func explainSandboxFailure() string {
 // Runs virtiofsd the way a sidecar runs, so the namespaces, syscalls and
 // per-executable policy are virtiofsd's own rather than an imitation's.
 func probeVirtiofsd(command []string) error {
+	// A signal ends the process without running defers, which would leave the
+	// probe's directories behind; the child itself dies with us regardless.
+	// Installed first, so one arriving mid-setup waits for the cleanup below.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		signal.Stop(sigCh)
+		select {
+		case sig := <-sigCh:
+			_ = syscall.Kill(os.Getpid(), sig.(syscall.Signal))
+		default:
+		}
+	}()
+
 	// In the short socket base, as a sidecar's socket is: under a long TMPDIR the
 	// path would overflow sun_path and read as a host restriction.
 	if err := ensurePrivateDir(socketDirBase()); err != nil {
@@ -95,12 +109,6 @@ func probeVirtiofsd(command []string) error {
 		})
 	}
 	defer stop()
-
-	// A signal ends the process without running defers, which would leave the
-	// probe's directories behind; the child itself dies with us regardless.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
 	ready := make(chan error, 1)
 	go func() { ready <- awaitSidecarSocket(sock, exit) }()
 	select {
