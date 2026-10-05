@@ -305,6 +305,7 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}{
 		{newUpCmd(), "bundle"},
 		{newRouteServeCmd(), "activated-socket"},
+		{newRouteServeCmd(), "launchd-socket"},
 	} {
 		t.Run(c.cmd.Name()+" --"+c.flag, func(t *testing.T) {
 			f := c.cmd.Flags().Lookup(c.flag)
@@ -318,12 +319,24 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}
 }
 
+// A launchd job from an older nix-darwin module runs until the next rebuild
+// rewrites it, so the old spelling must still select the same socket.
+func TestLaunchdSocketSpellingStillNamesTheActivatedSocket(t *testing.T) {
+	cmd := newRouteServeCmd()
+	if err := cmd.ParseFlags([]string{"--launchd-socket", "Listeners"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cmd.Flags().Lookup("activated-socket").Value.String(); got != "Listeners" {
+		t.Errorf("--launchd-socket Listeners left --activated-socket as %q", got)
+	}
+}
+
 // The nix-darwin and NixOS modules compose these command lines in Nix, where
 // nothing type-checks them against the CLI. A flag renamed here and missed
 // there fails at service start time, with the error in a log nobody watches.
 func TestServiceCommandLinesStillParse(t *testing.T) {
 	// Kept verbatim from nix/darwin-module.nix's `command =` strings and
-	// nix/nixos-module.nix's ExecStart lines, which share their flags, with
+	// nix/nixos-module.nix's ExecStart and ExecStop lines, which share them, with
 	// the store paths and names substituted.
 	for _, c := range []struct {
 		argv     []string
@@ -331,6 +344,7 @@ func TestServiceCommandLinesStillParse(t *testing.T) {
 	}{
 		{[]string{"up", "--foreground", "--bundle", "/nix/store/x-sprout-vm-runner", "--instance", "runner"}, "sprout up"},
 		{[]string{"route", "serve", "--activated-socket", "Listeners", "--domain", "sprout.localhost", "--no-wake"}, "sprout route serve"},
+		{[]string{"stop", "--all"}, "sprout stop"},
 	} {
 		t.Run(strings.Join(c.argv, " "), func(t *testing.T) {
 			root := newRootCmd()

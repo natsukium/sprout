@@ -82,6 +82,10 @@ docs/how-to/run-as-daemon.md.`,
 	// Hidden, not removed: the nix-darwin and NixOS modules pass it, but no one
 	// at a prompt can supply an activated socket by hand.
 	_ = cmd.Flags().MarkHidden("activated-socket")
+	// A launchd job written by an older nix-darwin module still passes this
+	// until the next darwin-rebuild, and must keep serving across the upgrade.
+	cmd.Flags().StringVar(&activatedSocket, "launchd-socket", "", "former name of --activated-socket")
+	_ = cmd.Flags().MarkDeprecated("launchd-socket", "use --activated-socket")
 	return cmd
 }
 
