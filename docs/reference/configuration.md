@@ -153,7 +153,7 @@ one, see [project host credentials](../how-to/project-credentials.md).
 
 | Credential | Strategy | Notes |
 | --- | --- | --- |
-| `gh` | materialize | Keychain token via `gh auth token`, rendered into the guest's `hosts.yml`. |
+| `gh` | materialize | The token `gh auth token` prints (from the macOS Keychain, a desktop keyring, or gh's own `hosts.yml`), rendered into the guest's `hosts.yml`. |
 | `aws` | mount, rw | `~/.aws` mounted live so `aws sso login` on either side works. Set `readOnly = true` to lock it down. |
 | `aws-config` | materialize | Effective AWS config (including `$AWS_CONFIG_FILE`) rendered at boot and selected with `AWS_CONFIG_FILE`. |
 | `ssh-agent` | socket | Host `SSH_AUTH_SOCK` forwarded; keys never enter the VM. |
@@ -204,10 +204,12 @@ A shared cache lives at `~/.cache/sprout/<arch>/<name>`, a project cache at
 `~/.cache/sprout/<arch>/.projects/<repo>-<hash>/<name>`, where the hash is
 taken over the clone's git-common-dir and the label is the repository
 directory it sits in. The `~/.cache/sprout` root follows `XDG_CACHE_HOME`
-when the variable is set. The host's own `~/.cargo` and `~/Library/Caches` are
-never used: host artifacts are darwin, guest artifacts are linux, and mixing
-them confuses tooling. Caches are keyed by guest arch so a future x86_64
-(Rosetta) guest gets its own tree.
+when the variable is set. The host's own caches (`~/.cargo`, `~/Library/Caches`,
+and the like) are never used: on macOS host artifacts are Darwin
+binaries, and even on a Linux host the guest's toolchain and libraries are not
+the host's, so mixing them confuses tooling. Caches are keyed by guest arch,
+so `<arch>` is `aarch64-linux` on a Mac or an `aarch64` Linux host and
+`x86_64-linux` on an `x86_64` one.
 
 An instance cache has no host directory at all: it is a directory on the
 guest's `/var` volume, bind-mounted to `guestPath` before sshd accepts the

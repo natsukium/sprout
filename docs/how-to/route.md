@@ -15,12 +15,13 @@ http://main.sprout.localhost:8080/          → the "main" instance's :80
 http://feat-login.sprout.localhost:8080/    → "feat-login"'s :80
 ```
 
-(The example picks 8080 because macOS refuses a non-root loopback bind of
-port 80; for port-free URLs see [the port 80 problem](#the-port-80-problem-on-macos)
-below.)
+(The example picks 8080 because macOS and Linux both refuse a non-root
+loopback bind of port 80; for port-free URLs see [the port 80
+problem](#the-port-80-problem) below.)
 
-`*.localhost` always resolves to your own machine by browser and macOS
-convention, so this needs no `/etc/hosts` or resolver change. The router
+`*.localhost` always resolves to your own machine by browser convention,
+which macOS's resolver and, on Linux, systemd-resolved and `nss-myhostname`
+also follow, so this needs no `/etc/hosts` or resolver change. The router
 binds one port and forwards each request to the right instance by its
 `Host:` header: the same name mapping `sprout shell` uses, so a branch
 `feat/login` is reached as `feat-login`.
@@ -50,6 +51,12 @@ apart by, for a project whose UI is not at the bare instance name:
 ```console
 $ sprout open --port 8080 --host-prefix admin.dev  # http://admin.dev.<name>.sprout.localhost:8080/
 ```
+
+The browser opens through `open` on macOS and `xdg-open` (from xdg-utils) on
+Linux. On a Linux host with no graphical session, where neither `DISPLAY` nor
+`WAYLAND_DISPLAY` is set (over SSH, say), `sprout open` prints the URL and
+exits 0 instead, because `xdg-open` would fall back to a terminal browser
+that takes over your terminal.
 
 `--port` has to match the port the router serves on; it defaults to 80, like
 the router's. If nothing is listening there, `open` says so and names the
@@ -225,11 +232,21 @@ Route traffic counts as activity, so an instance you keep requesting will
 not idle-stop under you; once its routed connections close it stops on its
 normal `idle.after` schedule and the next visit wakes it again.
 
-## The port 80 problem on macOS
+## The port 80 problem
 
-macOS refuses to let a non-root process bind `127.0.0.1:80` (a specific
-address on a privileged port), so the bare `sprout route serve` above needs one of
-three choices; the command prints them if the bind fails:
+On either host a non-root process may not bind a privileged port (below 1024)
+on the router's default loopback address, so the bare `sprout route serve`
+above fails on its default port 80. The
+remedies differ per host, and the command prints the ones that apply when the
+bind fails.
+
+Without `--bind` the router binds `localhost`, which is both `127.0.0.1` and
+`::1` on the one port, since a browser may resolve `localhost` to either.
+
+### On macOS
+
+macOS refuses a non-root bind of a specific address such as `127.0.0.1:80`,
+but not of `0.0.0.0:80`. That leaves three choices:
 
 - **An unprivileged port:** `sprout route serve --port 8080`. URLs then include
   it: `http://feat-login.sprout.localhost:8080/`.
@@ -243,8 +260,9 @@ three choices; the command prints them if the bind fails:
   resolution on their side (`*.sprout.localhost` would resolve to *their*
   loopback, not yours) and exposes just that port.
 - **A launchd daemon** that binds `:80` for you and hands the socket to a
-  router running as your user (`services.sprout.route`, below). This is the only
-  way to keep loopback-only, root-free, port-80 URLs.
+  router running as your user (`services.sprout.route` in the nix-darwin
+  module, below). This is the only way to keep loopback-only, root-free,
+  port-80 URLs.
 
 Take the first for a one-off and the third for daily use; a router left on
 `0.0.0.0` keeps every instance open to the network long after the reason for it
@@ -255,14 +273,25 @@ address) exposes the router on just that interface rather than all of them.
 The port-80 allowance does not come along: macOS permits the non-root
 privileged bind only for `0.0.0.0`, so a specific address needs an
 unprivileged port or the launchd module.
-Without it the router binds `localhost`, which is both `127.0.0.1` and `::1` on
-the one port, since a browser may resolve `localhost` to either.
+
+### On Linux
 
 Linux refuses a non-root bind below `net.ipv4.ip_unprivileged_port_start`
-(1024 by default) on every address, `0.0.0.0` included, so there the choices
-are an unprivileged port, lowering that sysctl, which lets every local user
-bind from that port up, or on NixOS a systemd socket that binds `:80` for the
-router (`services.sprout.route`, below).
+(1024 by default) on every address, `0.0.0.0` included, so binding all
+interfaces is no way around it. The choices are:
+
+- **An unprivileged port:** `sprout route serve --port 8080`, as on macOS.
+- **Lower the threshold:** `sudo sysctl -w
+  net.ipv4.ip_unprivileged_port_start=80` (persist it under `/etc/sysctl.d/`,
+  or with `boot.kernel.sysctl` on NixOS). The setting is host-wide: every
+  local user can then bind from port 80 up, not just the router.
+- **A systemd socket** that binds `:80` for you and hands it to a router
+  running as your user (`services.sprout.route` in the NixOS module, below).
+  Like the launchd job, it keeps the router loopback-only and root-free
+  without changing the threshold for anyone else.
+
+sprout reads the threshold rather than assuming 1024, so on a host where it
+is already 80 or lower, the plain `sprout route serve` binds port 80 directly.
 
 ## Always-on port 80, without root
 
@@ -338,9 +367,10 @@ yours does not, add the name to its allowlist (for Vite,
 
 ## Reaching a route from curl or a script
 
-`*.localhost` resolving to `127.0.0.1` is a browser and macOS *resolver*
-convention, but the system resolver `curl` uses does not always apply it to
-multi-label names like `feat-login.sprout.localhost`. If a plain
+`*.localhost` resolving to loopback is a browser convention, but the system
+resolver `curl` uses does not always apply it to multi-label names like
+`feat-login.sprout.localhost` (on Linux, it depends on whether
+systemd-resolved or `nss-myhostname` is configured). If a plain
 `curl http://feat-login.sprout.localhost:8080/` fails to resolve, point it at
 loopback explicitly; the router still demuxes on the `Host` header curl
 sends:

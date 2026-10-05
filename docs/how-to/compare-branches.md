@@ -40,7 +40,7 @@ http://5173.schema-b.sprout.localhost:8080/
 
 Put the two URLs in two windows and switch between them. `sprout open --port
 8080 -i schema-a 5173` assembles a URL for you instead of recalling the label
-rules. [Reach instances by name](route.md) covers those rules and the macOS
+rules. [Reach instances by name](route.md) covers those rules and the privileged-port
 restriction behind the `:8080` above.
 
 ## Compare what a browser does not show

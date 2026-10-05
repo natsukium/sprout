@@ -57,11 +57,11 @@ otherwise `~/.local/state`.
 
 ## Socket paths
 
-Unix socket addresses are capped near 104 bytes (`sockaddr_un.sun_path`),
-while the instance directory's depth follows the state root, which can be
-arbitrarily deep — a self-hosted CI runner's home is enough to overflow it.
-Socket system calls (bind and dial, in sprout and in vfkit) therefore address
-the sockets through `/tmp/sprout-<uid>/<hash>/sock`, where `<hash>` is a
+Unix socket addresses are capped near 104 bytes on macOS and 108 on Linux
+(`sockaddr_un.sun_path`), while the instance directory's depth follows the
+state root, which can be arbitrarily deep — a self-hosted CI runner's home is
+enough to overflow it. Socket system calls (bind and dial, in sprout, the
+runner, and its sidecars) therefore address the sockets through `/tmp/sprout-<uid>/<hash>/sock`, where `<hash>` is a
 symlink to the instance directory, so the length does not depend on the state
 root. `<hash>` is derived from the instance directory's path rather than the
 instance ID, so the same repository and branch under two state roots get
@@ -173,7 +173,8 @@ under a database.
 `clonefile(2)` on APFS, the `FICLONE` ioctl on Linux filesystems that have it.
 A 40 GiB volume clones in single-digit milliseconds without allocating new
 blocks because both files share extents until written. Without reflinks (for
-example, on ext4), sprout reports that it used a slower hole-skipping copy.
+example, on ext4, or on btrfs, which will not clone the No_COW `var.img` the
+runner creates), sprout reports that it used a slower hole-skipping copy.
 
 Snapshots live inside the instance directory, so `sprout delete` takes them with the
 instance; its prompt counts them first. A fork is a *new instance*, identified

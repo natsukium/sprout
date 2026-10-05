@@ -23,12 +23,31 @@ should not stay running. For a real failure, in order:
 
 ```sh
 sprout logs -n 200      # runner + console logs (a build failure is only in up.log, above)
-sprout doctor --build   # host prerequisites, incl. proving the aarch64-linux builder
+sprout doctor --build   # host prerequisites, incl. proving the guest builds
 ```
 
 A broken flake surfaces as Nix's own error in `up`'s output — `status`
 deliberately never evaluates the flake, so it stays instant and cannot
 show the error.
+
+Errors that name the flake's output shape mean the flake and the binary
+disagree on the platform contract, not that the flake is broken:
+
+- `exposes VMs as sproutConfigurations.<name>` — the flake predates
+  system-qualified outputs; the sprout changelog says what to change.
+- `defines VMs but not for <system>` — add that system to the flake's
+  `systems`.
+
+On a Linux host, the failure's hint names the cause:
+
+- `QEMU could not use KVM` — `/dev/kvm` is missing or not usable by this
+  user; `sprout doctor` says which.
+- A `virtiofsd` that exits with `entering sandbox` in its log, followed by
+  a hint naming sysctls — the host forbids the unprivileged user
+  namespaces each share needs. There is no fallback; the user has to
+  change the host (see [setup.md](setup.md#new-host)).
+- `another process still has …/var.img open` — a leftover QEMU holds the
+  disk; the hint names `fuser`/`lsof` to find it.
 
 ## States outside the normal loop
 

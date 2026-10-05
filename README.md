@@ -2,21 +2,22 @@
 
 Run one Linux development environment per Git branch.
 
-`sprout` boots NixOS microVMs for local development on Apple Silicon Macs. Each
-branch gets an independent instance with its own persistent `/var`, while its
-worktree is mounted live at `/workspace`. Open several Git worktrees and run
-databases, container stacks, or Kubernetes clusters side by side without
-sharing their runtime state or changing the ports they use inside the guest.
-It needs Nix with flakes enabled and an `aarch64-linux` builder; `sprout init`
-writes the flake, so a project starts without Nix code of its own.
+`sprout` boots NixOS microVMs for local development on Apple Silicon Macs and
+on Linux hosts with KVM. Each branch gets an independent instance with its own
+persistent `/var`, while its worktree is mounted live at `/workspace`. Open
+several Git worktrees and run databases, container stacks, or Kubernetes
+clusters side by side without sharing their runtime state or changing the
+ports they use inside the guest. It needs Nix with flakes enabled, plus an
+`aarch64-linux` builder on a Mac; `sprout init` writes the flake, so a project
+starts without Nix code of its own.
 
 ## Example: a feature branch running next to `main`
 
 Suppose the project's dev command starts a web app on port `5173` and
 PostgreSQL on port `5432`, and `feature/teams` changes the account schema and
 backfills every existing row. You want to click through the branch with
-today's version still open beside it. Starting the stack twice on one Mac does
-not get you there: the second copy has to move off both ports, and it still
+today's version still open beside it. Starting the stack twice on one machine
+does not get you there: the second copy has to move off both ports, and it still
 talks to the one PostgreSQL, so the branch's backfill also rewrites what
 `main` shows.
 
@@ -107,10 +108,11 @@ following cases have in common:
   fork`](docs/how-to/snapshots.md#hand-an-environment-to-another-branch) clones
   that volume into a new branch instead of repeating the setup.
 
-Container tooling on macOS draws this boundary elsewhere. Docker Desktop,
-OrbStack, and colima run every container inside one shared Linux VM: a
+Container tooling draws this boundary elsewhere. On macOS, Docker Desktop,
+OrbStack, and colima run every container inside one shared Linux VM; on
+Linux, Docker and Podman run them on the host's own kernel. Either way a
 compose project can keep a branch's containers apart, but all branches still
-compete for the host ports they publish, share that VM's kernel and container
+compete for the host ports they publish, share one kernel and container
 runtime, and none has a volume to snapshot or fork as one unit; a workload
 that assumes a machine of its own (systemd as PID 1, kernel modules, a k3s
 node) needs per-tool workarounds. Apple's `container` boots a VM per
@@ -128,13 +130,20 @@ when the project declares them.
 
 ## Quick start
 
-You need Apple Silicon macOS, Nix with flakes enabled, and an
-[`aarch64-linux` builder](examples/README.md#building-on-apple-silicon).
-Check the host before booting a VM:
+You need Nix with flakes enabled and one of these hosts:
+
+- Apple Silicon macOS, with an
+  [`aarch64-linux` builder](examples/README.md#building-on-apple-silicon).
+- `x86_64` or `aarch64` Linux, with `/dev/kvm` usable by your user and
+  unprivileged user namespaces allowed (Ubuntu restricts them by default);
+  the guest builds locally.
+
+The [getting-started tutorial](docs/tutorials/getting-started.md) spells out
+each prerequisite. Check the host before booting a VM:
 
 ```console
 $ nix shell github:natsukium/sprout
-$ sprout doctor
+$ sprout doctor --build
 ```
 
 In a repository without a `flake.nix`, generate a minimal VM definition and
@@ -187,10 +196,16 @@ running HTTP services by instance name; start it with
 
 ## Scope and status
 
-`sprout` supports Apple Silicon macOS and `aarch64-linux` guests. It is in the
-0.x.y pre-release line, so the CLI and configuration may change between
-releases. See the [changelog](CHANGELOG.md) for what each release changed, and
-the [compatibility and release policy](docs/reference/compatibility.md).
+`sprout` supports Apple Silicon macOS hosts (`aarch64-linux` guests under
+vfkit) and `x86_64-linux` and `aarch64-linux` hosts (guests of the same
+architecture under QEMU/KVM); the [compatibility
+reference](docs/reference/compatibility.md#supported-platforms) lists what each
+backend does differently and what is not supported yet. It is in the 0.x.y
+pre-release line, so the CLI and configuration may change between releases;
+the [changelog](CHANGELOG.md) says what each release changed and what to change
+when upgrading (flakes written for 0.1.x expose VMs under a different output),
+and the [compatibility and release policy](docs/reference/compatibility.md)
+says what is promised.
 
 `sprout` is a development environment, not a sandbox for untrusted code. With
 `workspace = true`, root in the guest can modify the checkout and its Git

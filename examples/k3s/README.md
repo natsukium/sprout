@@ -30,6 +30,8 @@ Once both pods are `Running`, run `sprout forward --bind 0.0.0.0 80` from the
 host and open <http://localhost:80>. Binding `0.0.0.0` lets an unprivileged
 process use port 80 on macOS, but also exposes the app to your network; `sprout
 forward 8080:80` with <http://localhost:8080> keeps it on loopback instead.
+Linux refuses a non-root bind of port 80 on every address unless
+`net.ipv4.ip_unprivileged_port_start` allows it, so there use `8080:80`.
 Stop the forward with Ctrl-C and remove the example environment when finished:
 
 ```console

@@ -13,7 +13,7 @@ Import `sprout.darwinModules.default` into your nix-darwin configuration, or
 ```nix
 services.sprout = {
   enable = true;
-  user = "you";                 # the jobs run as this user (state, Keychain, SSH agent)
+  user = "you";                 # the jobs run as this user (state, credentials, SSH agent)
   instances.runner-1 = {
     vcpu = 8;
     mem = "16GiB";
@@ -73,7 +73,9 @@ per-user state still resolves to that user's home. Logs go to the journal:
 The units see the host tools sprout shells out to (`git`, `ssh`, `nix`, `ps`)
 on `PATH`. Your Nix configuration must still enable `nix-command` and `flakes`
 in `nix.settings.experimental-features`, as `sprout doctor` asks of an
-interactive install.
+interactive install. The module grants no device access either: the units
+need the same usable `/dev/kvm` and unprivileged user namespaces as a
+hand-run `sprout up`, so run `sprout doctor` once as the units' user.
 
 ## The router
 

@@ -1,5 +1,5 @@
 {
-  description = "Disposable, declarative Linux microVMs for macOS development";
+  description = "Disposable, declarative Linux microVMs for per-branch development";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -130,7 +130,7 @@
               '';
               doCheck = false;
               meta = {
-                description = "Disposable, declarative Linux microVMs for macOS development";
+                description = "Disposable, declarative Linux microVMs for per-branch development";
                 mainProgram = "sprout";
                 license = pkgs.lib.licenses.asl20;
               };

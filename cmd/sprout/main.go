@@ -1,4 +1,4 @@
-// sprout: disposable, declarative Linux microVMs for macOS development.
+// sprout: disposable, declarative Linux microVMs, one per git branch.
 //
 // Nix defines (runner + manifest.json), this binary executes: it owns
 // instance state, the embedded guest network stack, and the vfkit runner

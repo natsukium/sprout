@@ -7,14 +7,22 @@ reporting no `flake.nix`).
 
 ## New host
 
-`sprout doctor` checks every prerequisite `up` needs — Nix with flakes,
-an `aarch64-linux` builder, Virtualization.framework, ssh — and prints
-the fix for whatever is missing. Run it once and apply what it says:
+`sprout doctor` checks every prerequisite `up` needs on this host and
+prints the fix for whatever is missing. On macOS that is Nix with flakes,
+an `aarch64-linux` builder, Virtualization.framework, and ssh; on Linux,
+Nix with flakes, a usable `/dev/kvm`, a `virtiofsd` that can enter its
+user-namespace sandbox (`rootless shares`), and ssh. Run it once and
+apply what it says:
 
 ```sh
 sprout doctor
-sprout doctor --build    # additionally proves the builder chain with a trivial Linux build
+sprout doctor --build    # additionally proves the guest builds, with a trivial Linux build
 ```
+
+Several Linux fixes change the host (joining the `kvm` group, setting a
+sysctl such as `kernel.apparmor_restrict_unprivileged_userns=0` on
+Ubuntu) and need root. Do not apply them yourself; report the failing
+check and doctor's hint to the user.
 
 ## Repository without a definition
 
