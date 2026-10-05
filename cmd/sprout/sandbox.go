@@ -50,7 +50,7 @@ func explainSandboxFailure() string {
 func probeVirtiofsd(command []string) error {
 	// In the short socket base, as a sidecar's socket is: under a long TMPDIR the
 	// path would overflow sun_path and read as a host restriction.
-	if err := os.MkdirAll(socketDirBase(), 0o700); err != nil {
+	if err := ensurePrivateDir(socketDirBase()); err != nil {
 		return err
 	}
 	sockDir, err := os.MkdirTemp(socketDirBase(), "probe-")

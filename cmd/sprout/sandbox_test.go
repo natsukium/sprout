@@ -5,7 +5,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -61,11 +64,18 @@ func TestVirtiofsdStandIn(t *testing.T) {
 	if mode == "" {
 		t.Skip("helper process only")
 	}
-	var sock string
+	var sock, shared string
 	for _, a := range os.Args {
 		if p, ok := strings.CutPrefix(a, "--socket-path="); ok {
 			sock = p
 		}
+		if p, ok := strings.CutPrefix(a, "--shared-dir="); ok {
+			shared = p
+		}
+	}
+	record := fmt.Sprintf("%d\n%s\n%s\n", os.Getpid(), sock, shared)
+	if err := os.WriteFile(os.Getenv("SPROUT_TEST_VIRTIOFSD_RECORD"), []byte(record), 0o600); err != nil {
+		os.Exit(3)
 	}
 	switch mode {
 	case "serve":
@@ -84,6 +94,7 @@ func TestVirtiofsdStandIn(t *testing.T) {
 
 func virtiofsdStandIn(t *testing.T, mode string) []string {
 	t.Setenv("SPROUT_TEST_VIRTIOFSD", mode)
+	t.Setenv("SPROUT_TEST_VIRTIOFSD_RECORD", filepath.Join(t.TempDir(), "record"))
 	return []string{os.Args[0], "-test.run=^TestVirtiofsdStandIn$", "--"}
 }
 
@@ -132,4 +143,31 @@ func TestProbeOfTheRealVirtiofsd(t *testing.T) {
 		t.Fatalf("the probe failed without a sandbox diagnosis:\n%v", err)
 	}
 	t.Logf("this host refuses virtiofsd's sandbox:\n%v", err)
+}
+
+// Whatever the verdict, the probe must leave neither its virtiofsd nor its
+// socket and shared directories behind.
+func TestProbeCleansUpAfterEveryOutcome(t *testing.T) {
+	for _, mode := range []string{"serve", "fail", "silent"} {
+		t.Run(mode, func(t *testing.T) {
+			shortenSidecarWaits(t)
+			sidecarReadyTimeout = 300 * time.Millisecond
+			command := virtiofsdStandIn(t, mode)
+			_ = probeVirtiofsd(command)
+			record, err := os.ReadFile(os.Getenv("SPROUT_TEST_VIRTIOFSD_RECORD"))
+			if err != nil {
+				t.Fatalf("stand-in never ran: %v", err)
+			}
+			fields := strings.Split(strings.TrimSpace(string(record)), "\n")
+			pid, _ := strconv.Atoi(fields[0])
+			if syscall.Kill(pid, 0) == nil {
+				t.Errorf("the probed virtiofsd (pid %d) is still running", pid)
+			}
+			for _, dir := range []string{filepath.Dir(fields[1]), fields[2]} {
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Errorf("%s survived the probe (stat err %v)", dir, err)
+				}
+			}
+		})
+	}
 }
