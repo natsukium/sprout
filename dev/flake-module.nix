@@ -214,12 +214,36 @@ in
               inherit (sc) name;
               readOnly = builtins.elem "--readonly" sc.exec;
               servesItsShare = builtins.any (
-                s: "virtiofsd-${s.tag}" == sc.name && s.socket == sockPlaceholder sc.ready.socket
+                s:
+                "virtiofsd-${s.tag}" == sc.name
+                && s.socket == sockPlaceholder sc.ready.socket
+                && builtins.elem "--socket-path=${s.socket}" sc.exec
+                && builtins.elem "--shared-dir=${s.source}" sc.exec
               ) cfg.microvm.shares;
               substituted = builtins.elem {
                 placeholder = sockPlaceholder sc.ready.socket;
                 value = "socket:${sc.ready.socket}";
               } vm.manifest.substitutions;
+              squashesGuestIdsToTheHostUser =
+                lib.all
+                  (
+                    { id, symbol }:
+                    builtins.elem "--translate-${id}=squash-guest:0:/sprout/placeholder/host/${id}:4294967295" sc.exec
+                    && builtins.elem {
+                      placeholder = "/sprout/placeholder/host/${id}";
+                      value = symbol;
+                    } vm.manifest.substitutions
+                  )
+                  [
+                    {
+                      id = "uid";
+                      symbol = "hostUid";
+                    }
+                    {
+                      id = "gid";
+                      symbol = "hostGid";
+                    }
+                  ];
             }) vm.manifest.backend.sidecars;
           expectedSidecars =
             map
@@ -231,6 +255,7 @@ in
                 ];
                 servesItsShare = true;
                 substituted = true;
+                squashesGuestIdsToTheHostUser = true;
               })
               [
                 "virtiofsd-ro-store"

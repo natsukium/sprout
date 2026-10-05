@@ -181,3 +181,32 @@ func standInAlive(t *testing.T, sock string) bool {
 	pid, _ := strconv.Atoi(string(b))
 	return syscall.Kill(pid, 0) == nil
 }
+
+// A sidecar dying under a running guest takes its share away, so the daemon
+// must stop the VM and report the sidecar rather than wait for the guest.
+func TestLostSidecarStopsTheRunnerAndIsReported(t *testing.T) {
+	exit := &runnerExit{done: make(chan struct{})}
+	lost := make(chan *sidecar, 1)
+	lost <- &sidecar{name: "virtiofsd-workspace"}
+	stopped := false
+	got := awaitRunnerExit(nil, lost, exit, func() { stopped = true; close(exit.done) })
+	if !stopped {
+		t.Fatal("the runner was not asked to stop")
+	}
+	if got == nil || got.name != "virtiofsd-workspace" {
+		t.Fatalf("lost sidecar = %v, want virtiofsd-workspace", got)
+	}
+}
+
+// virtiofsd exits as soon as QEMU disconnects, which can be observed before
+// QEMU's own exit; that ordinary shutdown is not a lost sidecar.
+func TestSidecarExitingWithTheRunnerIsNotALoss(t *testing.T) {
+	exit := &runnerExit{done: make(chan struct{})}
+	lost := make(chan *sidecar, 1)
+	lost <- &sidecar{name: "virtiofsd-workspace"}
+	go func() { time.Sleep(50 * time.Millisecond); close(exit.done) }()
+	stopped := false
+	if got := awaitRunnerExit(nil, lost, exit, func() { stopped = true }); got != nil || stopped {
+		t.Fatalf("reported %v (stop requested: %v) for a sidecar that exited with its runner", got, stopped)
+	}
+}

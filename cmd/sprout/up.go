@@ -834,6 +834,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 		// a runner holding var.img with no control socket, invisible to every
 		// probe until the next boot's orphan reaper finds it.
 		gracefulStop(ctl, socks.vmControl, cmd, exit)
+		<-exit.done
 		return err
 	}
 
@@ -847,22 +848,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	var lost *sidecar
-	select {
-	case sig := <-sigCh:
-		fmt.Printf("\nreceived %s, shutting down …\n", sig)
-		srv.stopOnce.Do(stop)
-		<-exit.done
-	case p := <-sidecars.exited():
-		// virtiofsd also exits the moment QEMU disconnects, which can be seen
-		// before QEMU's own exit: only a sidecar the runner outlives is lost.
-		if !exit.within(sidecarLostGrace) {
-			lost = p
-			srv.stopOnce.Do(stop)
-			<-exit.done
-		}
-	case <-exit.done:
-	}
+	lost := awaitRunnerExit(sigCh, sidecars.exited(), exit, func() { srv.stopOnce.Do(stop) })
 	err = exit.err
 
 	if lost != nil {
@@ -1008,4 +994,26 @@ func (e *runnerExit) within(d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
+}
+
+// Blocks until the runner has exited, asking it to stop on a signal or on a
+// lost sidecar, and returns the sidecar when one was lost.
+func awaitRunnerExit(sigCh <-chan os.Signal, lostSidecar <-chan *sidecar, exit *runnerExit, stop func()) *sidecar {
+	select {
+	case sig := <-sigCh:
+		fmt.Printf("\nreceived %s, shutting down …\n", sig)
+		stop()
+		<-exit.done
+	case p := <-lostSidecar:
+		// virtiofsd also exits the moment QEMU disconnects, which can be seen
+		// before QEMU's own exit: only a sidecar the runner outlives is lost.
+		if exit.within(sidecarLostGrace) {
+			return nil
+		}
+		stop()
+		<-exit.done
+		return p
+	case <-exit.done:
+	}
+	return nil
 }
