@@ -129,11 +129,8 @@ Copy-on-write clones are a filesystem feature, and a per-volume one: macOS
 formats its own volumes as APFS, but a state directory placed on an external
 or network volume with another filesystem has no clones, and neither does a
 clone that would cross volume boundaries. On Linux sprout asks for a reflink
-(the `FICLONE` ioctl), which XFS created with reflink support (the `mkfs.xfs`
-default) provides and ext4 does not. btrfs supports reflinks but not for
-this file: the runner marks a new `var.img` No_COW (`chattr +C`, visible in
-`lsattr`) when it creates it, and btrfs refuses to clone a No_COW file, so on
-btrfs every snapshot and fork is a full copy. Without a clone, sprout falls
+(the `FICLONE` ioctl), which btrfs and XFS created with reflink support (the
+`mkfs.xfs` default) provide and ext4 does not. Without a clone, sprout falls
 back to a hole-skipping copy that is correct but takes real time and real
 disk. It tells you which path it took:
 
@@ -143,3 +140,16 @@ snapshot "before-migration" of instance "main" created (full copy: this filesyst
 
 `--live` is refused on that path, since a copy that takes minutes cannot be
 atomic against a guest writing to the image underneath it.
+
+A `var.img` that a pre-release Linux build of sprout created on btrfs is
+marked No_COW (`chattr +C`, visible in `lsattr`), which btrfs refuses to
+clone and which cannot be cleared from a file that has data. sprout names
+the flag instead of the filesystem in that case. Restoring a snapshot fixes
+it for good: the snapshot is a fresh file without the flag, and restore
+clones it into a fresh `var.img`.
+
+```console
+$ sprout stop
+$ sprout snapshot create unflag
+$ sprout snapshot restore unflag
+```

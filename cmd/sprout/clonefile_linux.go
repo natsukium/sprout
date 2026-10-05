@@ -40,3 +40,18 @@ func cowClone(src, dst string) error {
 	}
 	return nil
 }
+
+// FS_NOCOW_FL, which x/sys/unix does not export.
+const fsNoCoWFlag = 0x00800000
+
+// btrfs refuses to reflink a No_COW file, so such an image is full-copied
+// even where the filesystem otherwise clones.
+func markedNoCoW(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	flags, err := unix.IoctlGetUint32(int(f.Fd()), unix.FS_IOC_GETFLAGS)
+	return err == nil && flags&fsNoCoWFlag != 0
+}

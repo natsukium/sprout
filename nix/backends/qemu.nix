@@ -82,10 +82,29 @@ in
     { config, lib, ... }:
     let
       microvmMachine = config.microvm.qemu.machine == "microvm";
+      varVolume = lib.findFirst (v: v.image == "var.img") null config.microvm.volumes;
     in
     {
       microvm = {
         hypervisor = "qemu";
+        # Ahead of microvm.nix's own creation, which then finds the image and
+        # skips it: that one marks the file No_COW, and btrfs refuses to
+        # reflink a No_COW file, so every snapshot and fork would be a full
+        # copy and `--live` would be refused.
+        preStart = lib.optionalString (varVolume != null && varVolume.autoCreate) ''
+          if [ ! -e var.img ]; then
+            ${hostPkgs.coreutils}/bin/truncate -s ${toString varVolume.size}M var.img
+            ${hostPkgs.e2fsprogs}/bin/mkfs.ext4 ${
+              lib.escapeShellArgs (
+                lib.optionals (varVolume.label != null) [
+                  "-L"
+                  varVolume.label
+                ]
+                ++ lib.optionals (varVolume.mkfsExtraArgs != null) varVolume.mkfsExtraArgs
+              )
+            } var.img
+          fi
+        '';
         # Absolute for the same reason as vfkit's: microvm.nix resolves a
         # relative socket against the deep instance directory.
         socket = socketPlaceholder control;

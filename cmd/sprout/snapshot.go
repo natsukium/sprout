@@ -173,6 +173,9 @@ func copyVarImage(src, dst string, live bool) (cow bool, err error) {
 	}
 	if err := cowClone(src, dst); err != nil {
 		if errors.Is(err, errCoWUnsupported) {
+			if markedNoCoW(src) {
+				return false, fmt.Errorf("%s is marked No_COW (chattr +C), which rules out copy-on-write clones, so a running instance's image cannot be copied atomically; stop the instance and retry without --live; once it is stopped, creating and restoring a snapshot replaces the image with one that clones, after which --live works", src)
+			}
 			return false, fmt.Errorf("%s is on a filesystem without copy-on-write clones, so a running instance's image cannot be copied atomically; stop the instance and retry without --live", filepath.Dir(src))
 		}
 		return false, err
@@ -180,9 +183,12 @@ func copyVarImage(src, dst string, live bool) (cow bool, err error) {
 	return true, nil
 }
 
-func copyNote(cow bool) string {
+func copyNote(cow bool, src string) string {
 	if cow {
 		return "copy-on-write clone, no additional disk used yet"
+	}
+	if markedNoCoW(src) {
+		return "full copy: " + src + " is marked No_COW (chattr +C), which rules out copy-on-write clones; restoring a snapshot once replaces it with an image that clones"
 	}
 	return "full copy: this filesystem has no copy-on-write clones"
 }
@@ -267,7 +273,7 @@ func cmdSnapshotCreate(selector string, live bool, snapName string) error {
 		return err
 	}
 
-	fmt.Printf("snapshot %q of instance %q created (%s)\n", snapName, id.Display(), copyNote(cow))
+	fmt.Printf("snapshot %q of instance %q created (%s)\n", snapName, id.Display(), copyNote(cow, img))
 	if running {
 		fmt.Println(crashConsistentNote("taken while running"))
 	}
@@ -453,7 +459,7 @@ func cmdSnapshotRestore(selector string, force bool, snapName string) error {
 		os.Remove(staging)
 		return err
 	}
-	fmt.Printf("instance %q restored to snapshot %q (%s)\n", id.Display(), snapName, copyNote(cow))
+	fmt.Printf("instance %q restored to snapshot %q (%s)\n", id.Display(), snapName, copyNote(cow, src))
 	printBootHint(id.Display())
 	return nil
 }
