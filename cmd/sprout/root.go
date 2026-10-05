@@ -15,7 +15,7 @@ const (
 	groupIntegration = "integration"
 )
 
-const rootLong = `sprout — one disposable Linux microVM per git branch, on macOS
+const rootLong = `sprout — one disposable Linux microVM per git branch, on macOS or Linux
 
 Every command acts on the branch checked out in the current worktree, scoped
 to its repository. Outside a git repository, or on a detached HEAD, it falls
@@ -88,7 +88,7 @@ func groupingCmd(cmd *cobra.Command) *cobra.Command {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sprout",
-		Short: "One disposable Linux microVM per git branch, on macOS",
+		Short: "One disposable Linux microVM per git branch, on macOS or Linux",
 		Long:  rootLong,
 		// main prints "sprout: <err>" and picks the exit code, so cobra must
 		// not print the error or dump usage itself.

@@ -1,5 +1,6 @@
-# gh keeps its token in the macOS Keychain, so a mount cannot see it; the
-# host script extracts it and renders the guest's hosts.yml.
+# gh keeps its token in the system keyring where it can (the macOS Keychain, a
+# Secret Service keyring on Linux), so a mount cannot see it; the host script
+# extracts it and renders the guest's hosts.yml.
 #
 # hostPkgs is a module arg of the *outer* VM module; the entry submodule
 # below does not inherit it, so the exec default captures it from this
@@ -27,6 +28,6 @@
       }
     ];
     default = { };
-    description = "The gh Keychain token, materialized into the guest's hosts.yml.";
+    description = "The token `gh auth token` prints on the host, materialized into the guest's hosts.yml.";
   };
 }

@@ -30,8 +30,8 @@ func cloneFile(src, dst string) (cow bool, err error) {
 }
 
 // Holes are approximated rather than preserved via SEEK_DATA/SEEK_HOLE, which
-// is harmless for a disk image and avoids per-platform code on a path that
-// never runs on macOS, sprout's only host.
+// is harmless for a disk image and avoids per-platform code on a fallback
+// path.
 func copySparse(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {

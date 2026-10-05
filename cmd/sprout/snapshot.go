@@ -206,7 +206,7 @@ func newSnapshotCreateCmd() *cobra.Command {
 	var live bool
 	cmd := &cobra.Command{
 		Use:   "create SNAPSHOT",
-		Short: "Save the /var volume (copy-on-write, instant)",
+		Short: "Save the /var volume (copy-on-write where the filesystem allows)",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 	}
 	selector := addInstanceFlag(cmd)

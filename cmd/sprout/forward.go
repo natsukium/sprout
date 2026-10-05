@@ -65,7 +65,7 @@ comparison across branches needs.`,
 		}),
 	}
 	selector := addInstanceFlag(cmd)
-	cmd.Flags().StringVar(&bind, "bind", defaultBindAddress, "address to bind (0.0.0.0 for all interfaces, reachable from your LAN; also lets you bind privileged ports <1024 without root on macOS)")
+	cmd.Flags().StringVar(&bind, "bind", defaultBindAddress, "address to bind (0.0.0.0 for all interfaces, reachable from your LAN; on macOS also the one non-root way onto a privileged port <1024)")
 	cmd.RunE = func(_ *cobra.Command, args []string) error { return cmdForward(*selector, bind, args) }
 	return cmd
 }
