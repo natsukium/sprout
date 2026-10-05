@@ -132,8 +132,14 @@ var wakeSettleWait = 15 * time.Second
 // `stop` in between sees nothing to stop. Exiting only once each wake's daemon
 // holds its claim (or the wake has ended) means a stop that follows the router
 // — the NixOS module's shutdown sweep — finds every boot it started.
+//
+// Closing the listeners leaves accepted connections running their handlers,
+// so wakes are refused from here on, under the same lock that guards the set:
+// otherwise a handler could start one after the set was read, and nothing
+// would wait for it.
 func (r *router) settleWakes(wait time.Duration) {
 	r.mu.Lock()
+	r.stopping = true
 	ids := make([]string, 0, len(r.waking))
 	for id := range r.waking {
 		ids = append(ids, id)
@@ -311,8 +317,9 @@ type router struct {
 	wake    bool
 	verbose bool
 
-	mu     sync.Mutex
-	waking map[string]bool
+	mu       sync.Mutex
+	waking   map[string]bool
+	stopping bool
 }
 
 // One Fprintf, so concurrent connections interleave whole lines.
@@ -429,6 +436,11 @@ func (r *router) writeNotReady(conn net.Conn, head []byte, host, id, note string
 	case readyWaking:
 		r.logRequest(host, head, note+instanceLog(id)+" is still booting (503)")
 		r.writeWaking(conn, displayForID(id))
+	case readyRouterStopping:
+		r.logRequest(host, head, note+instanceLog(id)+" is stopped and the router is shutting down (503)")
+		r.writeError(conn, http.StatusServiceUnavailable,
+			fmt.Sprintf("Instance %q is stopped", displayForID(id)),
+			"The router is shutting down, so it does not start instances. Start it with <code>sprout start</code>.")
 	}
 	// No default: a state this switch does not know closes the connection
 	// with nothing written, where a default would dress it up as an
@@ -568,10 +580,11 @@ func guestStream(ctl net.Conn, guestAddr string, track bool) (net.Conn, error) {
 type readyState int
 
 const (
-	readyOK      readyState = iota // running and answering SSH
-	readyWaking                    // booting, or a wake was just kicked off
-	readyStopped                   // down, and --no-wake forbids starting it
-	readyGone                      // down, and its recorded build is missing (can't start)
+	readyOK             readyState = iota // running and answering SSH
+	readyWaking                           // booting, or a wake was just kicked off
+	readyStopped                          // down, and --no-wake forbids starting it
+	readyGone                             // down, and its recorded build is missing (can't start)
+	readyRouterStopping                   // down, and the router is shutting down, so it starts nothing
 )
 
 // The wake goes through `start`, not `up`: start re-boots a recorded bundle
@@ -597,18 +610,25 @@ func (r *router) ensureReady(id string) (readyState, *controlInfo) {
 			return readyGone, nil
 		}
 	}
-	r.startWake(id)
+	if !r.startWake(id) {
+		return readyRouterStopping, nil
+	}
 	return readyWaking, nil
 }
 
 // At most one wake per instance, so a burst of requests shares one boot. The
 // entry is held for the whole boot: releasing it early would let the next
 // refresh start a second daemon that clobbers the first's control socket.
-func (r *router) startWake(id string) {
+// Reports false only when the router is shutting down and starts nothing.
+func (r *router) startWake(id string) bool {
 	r.mu.Lock()
 	if r.waking[id] {
 		r.mu.Unlock()
-		return
+		return true
+	}
+	if r.stopping {
+		r.mu.Unlock()
+		return false
 	}
 	r.waking[id] = true
 	r.mu.Unlock()
@@ -623,6 +643,7 @@ func (r *router) startWake(id string) {
 			fmt.Fprintf(os.Stderr, "route: waking %s: %v\n", displayForID(id), err)
 		}
 	}()
+	return true
 }
 
 // Blocks until the VM answers, so startWake's entry covers the whole boot.
