@@ -140,6 +140,7 @@ func instanceRecordPath(instDir string) string { return filepath.Join(instDir, "
 func consoleLogPath(instDir string) string     { return filepath.Join(instDir, "console.log") }
 func runnerLogPath(instDir string) string      { return filepath.Join(instDir, "runner.log") }
 func upLogPath(instDir string) string          { return filepath.Join(instDir, "up.log") }
+func sidecarLogPath(instDir string) string     { return filepath.Join(instDir, "sidecars.log") }
 
 func knownHostsPath(instDir string) string { return filepath.Join(instDir, "known_hosts") }
 

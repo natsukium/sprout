@@ -61,7 +61,7 @@ func TestManifestRunnerContract(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "run.sh")
-	if err := rewriteRunner(filepath.Join(bundle, "runner"), m, subs, out); err != nil {
+	if _, err := rewriteRunner(filepath.Join(bundle, "runner"), m, subs, out); err != nil {
 		t.Fatalf("manifest/runner contract broken: %v", err)
 	}
 	data, err := os.ReadFile(out)

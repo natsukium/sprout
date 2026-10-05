@@ -1,9 +1,17 @@
-{ guest, socketPlaceholder, ... }:
+{
+  guest,
+  placeholderFor,
+  shares,
+  ...
+}:
 let
+  socketPlaceholder = placeholderFor "sock";
   network = "net.sock";
   control = "vfkit-rest.sock";
 in
 {
+  inherit shares;
+
   module.microvm = {
     hypervisor = "vfkit";
     # Absolute, because microvm.nix prefixes a relative socket with the
