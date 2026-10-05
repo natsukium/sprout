@@ -173,8 +173,8 @@ under a database.
 `clonefile(2)` on APFS, the `FICLONE` ioctl on Linux filesystems that have it.
 A 40 GiB volume clones in single-digit milliseconds without allocating new
 blocks because both files share extents until written. Without reflinks (for
-example, on ext4, or on btrfs, which will not clone the No_COW `var.img` the
-runner creates), sprout reports that it used a slower hole-skipping copy.
+example, on ext4, or on btrfs for an older image marked No_COW), sprout
+reports that it used a slower hole-skipping copy.
 
 Snapshots live inside the instance directory, so `sprout delete` takes them with the
 instance; its prompt counts them first. A fork is a *new instance*, identified
