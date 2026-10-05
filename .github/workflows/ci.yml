@@ -54,10 +54,8 @@ jobs:
           - { system: aarch64-linux, runner: ubuntu-24.04-arm, kvm: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The action installs a udev rule opening /dev/kvm before installing Nix
-      # (its enable_kvm input, on by default). Nix would also detect kvm on
-      # its own, but declaring the features makes a missing /dev/kvm fail the
-      # test loudly instead of leaving the check unbuildable.
+      # Declared rather than auto-detected, so a missing /dev/kvm fails loudly
+      # instead of leaving the NixOS test check unbuildable.
       - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
         with:
           nix_conf: ${{ matrix.kvm && 'system-features = nixos-test benchmark big-parallel kvm' || '' }}

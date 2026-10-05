@@ -1024,18 +1024,15 @@ func (e *runnerExit) within(d time.Duration) bool {
 	}
 }
 
-// Installed before the daemon starts anything: a SIGTERM taking Go's default
-// action would end sprout with the runner already up, and PDEATHSIG would
-// then hand QEMU the SIGTERM it quits on without a guest poweroff. A signal
-// received before the runner exists stays buffered here until awaitRunnerExit
-// turns it into a graceful stop.
+// Installed before the daemon starts anything: under Go's default action a
+// SIGTERM ends sprout, and PDEATHSIG then hands QEMU a SIGTERM it quits on
+// without a guest poweroff.
 func watchStopSignals() chan os.Signal {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	return sigCh
 }
 
-// Nothing has booted yet, so a stop requested now is honoured by not booting.
 // An error, not a clean exit: a detached `up` reads a clean exit before
 // readiness as a handoff to a running daemon.
 func stopBeforeBoot(sigCh <-chan os.Signal, name string) error {

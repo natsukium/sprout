@@ -12,8 +12,8 @@ import (
 
 const wakeTestID = "aaaa00000050"
 
-// The wake's daemon is the real `start --foreground` path up to its claim; the
-// test instance's bundle does not exist, so it fails right after claiming.
+// The test instance's bundle does not exist, so this fails right after its
+// claim.
 func runWakeDaemon() {
 	if err := startForeground(&Identity{ID: wakeTestID, Name: "waking"}, takeClaimReport()); err != nil {
 		os.Exit(1)
@@ -21,8 +21,6 @@ func runWakeDaemon() {
 	os.Exit(0)
 }
 
-// The outgoing daemon holds the lock without serving, which the instance's
-// lock alone cannot tell apart from the wake's own daemon having claimed it.
 func wakeBehindAnOldDaemon(t *testing.T) (r *router, oldLock *os.File) {
 	t.Helper()
 	root := shortStateRoot(t)
@@ -56,9 +54,8 @@ func wakeOf(r *router) *wakeWatch {
 	return r.wakes[wakeTestID]
 }
 
-// A wake's daemon claims its instance only after the router forked it, so a
-// router that exited in between would leave a boot no following stop sees —
-// even while an older daemon still holds the lock it is queued behind.
+// An older daemon holding the lock without serving does not count as the
+// wake's claim.
 func TestRouterExitWaitsForTheWakesOwnDaemonToClaim(t *testing.T) {
 	if os.Getenv("SPROUT_TEST_WAKE_CHILD") == t.Name() {
 		runWakeDaemon()
@@ -75,9 +72,7 @@ func TestRouterExitWaitsForTheWakesOwnDaemonToClaim(t *testing.T) {
 	}
 }
 
-// Past the wait, a daemon still queued behind the old one is ended and reaped:
-// left alone, it would claim the instance and boot after the stop that follows
-// the router had found nothing.
+// A wake's daemon still unclaimed at the deadline is terminated and reaped.
 func TestRouterExitEndsAWakeThatNeverClaimed(t *testing.T) {
 	if os.Getenv("SPROUT_TEST_WAKE_CHILD") == t.Name() {
 		runWakeDaemon()
@@ -93,9 +88,8 @@ func TestRouterExitEndsAWakeThatNeverClaimed(t *testing.T) {
 	}
 }
 
-// Closing the listeners leaves an accepted connection's handler running, so a
-// request that arrives on it once shutdown has begun must not start a boot
-// that nothing then waits for.
+// A request on an already-accepted connection starts no wake once shutdown
+// has begun.
 func TestRouterStartsNoWakeOnceShutdownBegins(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000052"
@@ -136,8 +130,7 @@ func TestRouterStartsNoWakeOnceShutdownBegins(t *testing.T) {
 	}
 }
 
-// A wake that fails before its daemon claims anything must not hold the
-// router's exit to the full wait.
+// A wake that ended without forking a daemon does not hold the router's exit.
 func TestRouterExitStopsWaitingForAnEndedWake(t *testing.T) {
 	shortStateRoot(t)
 	const id = "aaaa00000051"

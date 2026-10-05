@@ -128,16 +128,14 @@ func stopOne(id string, behavior stopBehavior) error {
 	return nil
 }
 
-// Long enough for a daemon that has claimed its instance to start its sidecars
-// and runner and bind the control socket, short enough to leave a service
-// manager's stop timeout room for the guest poweroff that follows.
+// Must leave the NixOS sweep unit's TimeoutStopSec room for the guest poweroff
+// that follows.
 var bootingServeWait = 30 * time.Second
 
-// A daemon claims daemon.lock well before it serves control, and a stop that
-// read that window as "not running" would leave the boot to finish after the
-// stop reported success — at host shutdown, into systemd's final SIGKILL.
-// Waiting needs no daemon cooperation: the daemon takes no lifecycle lock
-// after claiming, so holding ours here cannot stall it.
+// A daemon holds daemon.lock well before it serves control; reading that window
+// as stopped would let the boot finish after the stop reported success.
+// Holding the lifecycle lock here cannot stall it: a daemon takes none after
+// claiming.
 func awaitBootingDaemon(id, dir, name string) (bool, error) {
 	if instanceRunning(id) {
 		return true, nil
@@ -453,8 +451,8 @@ func readerEchoesInput(r io.Reader) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// Concurrent because a service manager's stop timeout runs `stop --all` at host
-// shutdown: one at a time, N guests powering off would need N stop budgets.
+// Concurrent: `stop --all` runs under one service stop timeout at host
+// shutdown, and serial poweroffs would need one timeout each.
 func forEachOf(ids []string, fn func(id string) error) error {
 	errs := make([]error, len(ids))
 	var wg sync.WaitGroup

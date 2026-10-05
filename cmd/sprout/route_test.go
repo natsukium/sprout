@@ -25,9 +25,8 @@ func routeFlags(t *testing.T, given []string) *pflag.FlagSet {
 	return flags
 }
 
-// The service manager bound the socket before the router started, so --port
-// and --bind cannot be honored. Ignoring them would leave the router answering
-// somewhere other than where the command line says.
+// An activated socket is already bound, so --port and --bind are rejected
+// rather than silently ignored.
 func TestRouteListenersRejectsBindFlagsWithActivatedSocket(t *testing.T) {
 	for _, given := range [][]string{{"--port", "8080"}, {"--bind", "0.0.0.0"}, {"--port", "8080", "--bind", "0.0.0.0"}} {
 		_, _, err := routeListeners(routeFlags(t, given), "Listeners", "127.0.0.1", 80, "sprout.localhost")
@@ -51,8 +50,6 @@ func TestFlagsGivenSeesOnlyWhatWasSpelledOut(t *testing.T) {
 	}
 }
 
-// URLs carry whatever port the service manager actually bound, which the router
-// can only learn from the socket it was handed.
 func TestListenerPortReadsTheBoundSocket(t *testing.T) {
 	tcp, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

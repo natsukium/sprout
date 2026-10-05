@@ -79,11 +79,9 @@ docs/how-to/run-as-daemon.md.`,
 	cmd.Flags().BoolVar(&noWake, "no-wake", false, "do not auto-start a stopped instance when a request arrives for it")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log every request's Host, the instance it resolved to, and the guest port")
 	cmd.Flags().StringVar(&activatedSocket, "activated-socket", "", "serve the sockets the service manager bound under this name (launchd Sockets key, systemd FileDescriptorName) instead of binding one")
-	// Hidden, not removed: the nix-darwin and NixOS modules pass it, but no one
-	// at a prompt can supply an activated socket by hand.
+	// Hidden, not removed: the nix-darwin and NixOS modules pass it.
 	_ = cmd.Flags().MarkHidden("activated-socket")
-	// A launchd job written by an older nix-darwin module still passes this
-	// until the next darwin-rebuild, and must keep serving across the upgrade.
+	// Existing launchd jobs pass this until the next darwin-rebuild.
 	cmd.Flags().StringVar(&activatedSocket, "launchd-socket", "", "former name of --activated-socket")
 	_ = cmd.Flags().MarkDeprecated("launchd-socket", "use --activated-socket")
 	return cmd
@@ -111,14 +109,13 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 	}
 	defer closeAll(lns)
 
-	// The service manager owns the address in the activated case, so the port
-	// comes from the socket it bound, not --port.
+	// An activated socket's port comes from the socket, not --port.
 	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose}
 
 	fmt.Printf("routing %s → instances on %s (Ctrl-C to stop)\n", routeURLTemplate(dom, r.port), where)
 
-	// Before the first accept: a request may start a wake, and a SIGTERM taking
-	// Go's default action would then exit without settleWakes waiting for it.
+	// Before the first accept: Go's default SIGTERM action would exit without
+	// settleWakes waiting for a wake already started.
 	sigCh := watchStopSignals()
 	defer signal.Stop(sigCh)
 	beforeRouteServe()
@@ -131,23 +128,16 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 	return nil
 }
 
-// A test hook: what runs here falls between the handler and the first accept.
 var beforeRouteServe = func() {}
 
 var wakeSettleWait = 15 * time.Second
 
-// A wake forks a daemon that claims its instance only after it starts, and a
-// `stop` in between sees nothing to stop. Exiting only once each wake's daemon
-// has claimed its instance, or is gone, means a stop that follows the router
-// — the NixOS module's shutdown sweep — finds every boot it started. The
-// instance's lock cannot stand in for the claim: a previous daemon that has
-// stopped answering may still hold it, and this wake's daemon would take it
-// only after the sweep had seen it released.
+// A stop that follows the router (the NixOS shutdown sweep) finds nothing to
+// stop until each wake's daemon has claimed its instance. daemon.lock cannot
+// stand in for that claim: an unresponsive older daemon may still hold it.
 //
-// Closing the listeners leaves accepted connections running their handlers,
-// so wakes are refused from here on, under the same lock that guards the set:
-// otherwise a handler could start one after the set was read, and nothing
-// would wait for it.
+// Closed listeners leave accepted handlers running, so wakes are refused under
+// the same lock that guards the set.
 func (r *router) settleWakes(wait time.Duration) {
 	r.mu.Lock()
 	r.stopping = true
@@ -612,7 +602,6 @@ func (r *router) ensureReady(id string) (readyState, *controlInfo) {
 // At most one wake per instance, so a burst of requests shares one boot. The
 // entry is held for the whole boot: releasing it early would let the next
 // refresh start a second daemon that clobbers the first's control socket.
-// Reports false only when the router is shutting down and starts nothing.
 func (r *router) startWake(id string) bool {
 	r.mu.Lock()
 	if r.wakes[id] != nil {

@@ -722,8 +722,7 @@ func shortBootingServeWait(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { bootingServeWait = orig })
 }
 
-// A daemon that has claimed its instance but not yet bound its control socket
-// is booting, not stopped: the stop has to wait for it and then stop it.
+// A claimed daemon not yet serving control is booting, not stopped.
 func TestStopWaitsForABootingDaemonAndStopsIt(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000040"
@@ -774,8 +773,8 @@ func TestStopWaitsForABootingDaemonAndStopsIt(t *testing.T) {
 	}
 }
 
-// Something can hold the claim without ever serving (a snapshot restore), and
-// a stop must give up and say so rather than hang or claim success.
+// A claim that never serves (a snapshot restore) ends in an error, not a hang
+// or a reported success.
 func TestStopGivesUpOnAClaimThatNeverServes(t *testing.T) {
 	root := shortStateRoot(t)
 	const id = "aaaa00000041"
@@ -810,8 +809,7 @@ func TestStopOfAStoppedInstanceDoesNotWait(t *testing.T) {
 	}
 }
 
-// Each call blocks until every other one has started, so run one at a time
-// they would never finish.
+// Each call blocks until all have started, so a serial loop never finishes.
 func TestStopAllStopsInstancesConcurrently(t *testing.T) {
 	ids := []string{"a", "b", "c"}
 	var started sync.WaitGroup

@@ -15,8 +15,7 @@ in
   imports = [
     inputs.treefmt-nix.flakeModule
     inputs.git-hooks.flakeModule
-    # A NixOS test needs a KVM-capable builder, which GitHub's arm64 Linux
-    # runners are not.
+    # The CI x86_64-linux runner is the only one with /dev/kvm.
     {
       perSystem =
         { pkgs, system, ... }:

@@ -1,17 +1,12 @@
-# The NixOS module's units under a real systemd, without booting a guest: a
-# guest inside this test VM would need nested KVM, so instances run with their
-# ExecStart swapped for stand-ins, as is the router sweep's ExecStop. The
-# router is the real binary on real systemd-owned sockets. A full boot through
-# the module, router wake and sweep included, is nixos-module-boot-test.nix.
+# Stand-ins replace the guests, which would need nested KVM here; real boots
+# are nixos-module-boot-test.nix.
 { inputs }:
 pkgs:
 let
   sprout = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sprout;
 
-  # Behaves as `sprout up --foreground` does on SIGTERM: it stops the runner
-  # itself, after a guest poweroff takes a while, and exits cleanly. A runner
-  # that receives SIGTERM from anyone else logs it, as QEMU would quit on it
-  # without that poweroff.
+  # Stops its runner itself after a slow poweroff, as `sprout up` does; a
+  # runner SIGTERMed by anyone else logs it.
   standIn = pkgs.writeShellScript "sprout-up-stand-in" ''
     log="$HOME/instance.log"
     echo "start $(id -un) $1" >>"$log"
@@ -30,8 +25,7 @@ let
     serviceConfig.ExecStart = pkgs.lib.mkOverride priority "${standIn} ${arg}";
   };
 
-  # A daemon the router woke: it lives in the router's cgroup and has no unit
-  # of its own, so the only graceful stop it can get is the sweep's.
+  # A woken daemon: in the router's cgroup, with no unit of its own.
   wokenStandIn = pkgs.writeShellScript "sprout-woken-stand-in" ''
     echo $$ >"$HOME/woken.pid"
     trap '
@@ -68,8 +62,6 @@ pkgs.testers.runNixOSTest {
       };
 
       systemd.services.sprout-graceful = standInFor 50 "v1";
-      # A bundle that is not there fails the real binary's boot the way any
-      # failed boot does: a non-zero exit before readiness.
       systemd.services.sprout-broken.serviceConfig.ExecStart =
         lib.mkForce "${sprout}/bin/sprout up --foreground --bundle /nonexistent-bundle --instance broken";
       systemd.services.sprout-route-instances.serviceConfig.ExecStop = lib.mkForce sweepStandIn;

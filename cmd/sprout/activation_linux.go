@@ -1,13 +1,7 @@
 package main
 
-// Socket activation is how a NixOS host serves :80 without running the router
-// as root: Linux refuses a non-root bind below
-// net.ipv4.ip_unprivileged_port_start on every address, but a systemd socket
-// unit binds it and hands the descriptor to a service running as the user.
-//
-// This is sd_listen_fds(3) and sd_listen_fds_with_names(3) by hand: the
-// protocol is three environment variables and a fixed first descriptor, which
-// does not warrant a dependency on go-systemd.
+// sd_listen_fds(3) by hand: three environment variables and a fixed first
+// descriptor do not warrant a dependency on go-systemd.
 
 import (
 	"errors"
@@ -25,17 +19,15 @@ var errNotActivated = errors.New("--activated-socket needs sockets systemd hande
 
 func activatedListeners(name string) ([]net.Listener, error) {
 	pidEnv, countEnv, namesEnv := os.Getenv("LISTEN_PID"), os.Getenv("LISTEN_FDS"), os.Getenv("LISTEN_FDNAMES")
-	// A router waking an instance runs `sprout start`, whose detached daemon
-	// inherits this environment; left set, that daemon would read the
-	// variables as addressed to a process that never received the sockets.
+	// A woken instance's daemon inherits this environment and would read the
+	// variables as addressed to itself.
 	for _, v := range []string{"LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"} {
 		os.Unsetenv(v)
 	}
 
 	all, fds, err := systemdListenFDs(pidEnv, countEnv, namesEnv, os.Getpid(), name)
-	// systemd hands the descriptors over without close-on-exec, and one that
-	// leaked into a woken instance's daemon would keep the port bound after
-	// the router and its socket unit had both stopped.
+	// systemd passes them without close-on-exec; one leaked into a woken
+	// instance's daemon keeps the port bound after the socket unit stops.
 	for _, fd := range all {
 		syscall.CloseOnExec(fd)
 	}
@@ -57,8 +49,6 @@ func activatedListeners(name string) ([]net.Listener, error) {
 	return lns, nil
 }
 
-// Returns every passed descriptor as well as the ones named name, so the
-// caller can mark them all close-on-exec even when none matched.
 func systemdListenFDs(pidEnv, countEnv, namesEnv string, pid int, name string) (all, named []int, err error) {
 	if pidEnv == "" || countEnv == "" {
 		return nil, nil, errNotActivated

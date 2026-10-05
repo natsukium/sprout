@@ -1,6 +1,4 @@
-# The NixOS module's unit wiring, read from evaluated host configurations. The
-# bundles are instantiated, never built, so this runs on any checker; booting
-# through the units is nix/tests/nixos-module.nix.
+# Bundles are instantiated, never built, so this runs on any checker.
 { inputs, lib }:
 pkgs:
 let
@@ -90,8 +88,6 @@ let
         != null;
       expected = true;
     };
-    # Only sprout may receive the stop signal: the runner quits on SIGTERM
-    # without the guest shutdown sprout asks for first.
     testStopSignalsOnlySproutAndWaitsOutAGuestPoweroff = {
       expr = {
         inherit (runner.serviceConfig) KillMode;

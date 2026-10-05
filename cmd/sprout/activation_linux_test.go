@@ -47,9 +47,7 @@ func TestSystemdListenFDsRefusesWhatSystemdDidNotHandToThisProcess(t *testing.T)
 	}
 }
 
-// Runs in a child that received the listener as fd 3, the way systemd hands
-// one over: LISTEN_PID can only be the child's own pid once it exists, so the
-// child sets it before adopting.
+// The child sets LISTEN_PID itself: its pid does not exist before it starts.
 func TestActivatedListenersAdoptsTheSystemdSocket(t *testing.T) {
 	if os.Getenv("SPROUT_TEST_ACTIVATION") == "child" {
 		os.Setenv("LISTEN_PID", strconv.Itoa(os.Getpid()))

@@ -15,8 +15,6 @@ func sigtermSelf() {
 	time.Sleep(200 * time.Millisecond)
 }
 
-// Runs the calling test again in a child with mode set, returning its output
-// and whether it exited cleanly rather than being killed by the signal.
 func runSignalChild(t *testing.T, mode string) (string, bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -27,9 +25,7 @@ func runSignalChild(t *testing.T, mode string) (string, bool) {
 	return string(out), err == nil
 }
 
-// A SIGTERM between the daemon's setup and the runner's start must neither
-// kill sprout (PDEATHSIG would pass it straight to QEMU) nor be lost: it is
-// held until the boot can act on it.
+// A SIGTERM during setup neither kills sprout nor is lost.
 func TestStopSignalDuringSetupIsHeldForTheBoot(t *testing.T) {
 	if os.Getenv("SPROUT_TEST_SIGNAL_CHILD") == "daemon" {
 		sigCh := watchStopSignals()
@@ -51,8 +47,7 @@ func TestStopBeforeBootLetsAnUnsignalledBootGoAhead(t *testing.T) {
 	}
 }
 
-// A signal that arrived while the runner was starting is already buffered
-// when the daemon starts waiting, and must still become a stop.
+// A signal buffered before the wait still becomes a stop.
 func TestSignalBufferedBeforeTheWaitStillStopsTheRunner(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	exit, err := startManaged(cmd)
@@ -78,9 +73,7 @@ func TestSignalBufferedBeforeTheWaitStillStopsTheRunner(t *testing.T) {
 	}
 }
 
-// The router serves wakes from its first accept, so its SIGTERM handler has
-// to be in place by then, or a wake started before it would escape the
-// shutdown's wait.
+// The router's SIGTERM handler is in place before its first accept.
 func TestRouterHandlesSIGTERMFromItsFirstAccept(t *testing.T) {
 	if os.Getenv("SPROUT_TEST_SIGNAL_CHILD") == "router" {
 		t.Setenv("XDG_STATE_HOME", t.TempDir())

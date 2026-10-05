@@ -1,7 +1,5 @@
-# Real guests booted, restarted, woken and stopped through the NixOS module.
-# The guest runs inside the test VM, so the builder must offer nested KVM; that
-# keeps this out of `checks` (see nixos-module-vm-test.nix for the part that
-# needs none). Run it with `nix build .#legacyPackages.x86_64-linux.nixosTests.module-boot`.
+# Needs nested KVM, so it stays out of `checks`; run it with
+# `nix build .#legacyPackages.x86_64-linux.nixosTests.module-boot`.
 { inputs }:
 pkgs:
 let

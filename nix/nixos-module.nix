@@ -27,9 +27,8 @@ let
     };
   };
 
-  # System units rather than user units: a user manager exists only while its
-  # user is logged in or lingering, and an always-on instance must survive
-  # both logout and boot without either.
+  # System units, not user units: a user manager runs only while its user is
+  # logged in or lingering.
   runAs = user: home: {
     environment.HOME = home;
     unitConfig.RequiresMountsFor = [ home ];
@@ -56,11 +55,9 @@ let
         description = "sprout instance ${name}";
         path = hostTools;
         wantedBy = lib.optional supervised "multi-user.target";
-        # Ordered after them so that at shutdown the guest powers off while
-        # the network and the nix daemon (for GC roots) are still up, and
-        # before the router's sweep, which would otherwise stop it from under
-        # its own unit. The daemon's service is named as well as its socket:
-        # the socket outlives it at shutdown and cannot start it again.
+        # At shutdown the guest powers off before these stop: network and nix
+        # daemon (GC roots) stay up, and the sweep cannot stop it from under
+        # its unit. The socket alone cannot restart the nix daemon then.
         after = [
           "network.target"
           "nix-daemon.socket"
@@ -73,13 +70,11 @@ let
           ExecStart = "${sprout} up --foreground --bundle ${bundle} --instance ${name}";
           Restart = if supervised then "always" else "no";
           RestartSec = 30;
-          # The default control-group mode would SIGTERM the runner and its
-          # sidecars alongside sprout, and QEMU quits on SIGTERM without the
-          # guest shutdown sprout asks for (gracefulStop in up.go). Only sprout
-          # is signalled; whatever outlives it is killed at the timeout.
+          # control-group would SIGTERM QEMU too, which quits on it without the
+          # guest poweroff sprout asks for.
           KillMode = "mixed";
-          # Above sprout's own worst case: the backend's stop request, a 30s
-          # guest poweroff, a 15s SIGTERM wait, and the sidecars' teardown.
+          # Above sprout's worst case: a 30s guest poweroff, a 15s SIGTERM wait
+          # and the sidecars' teardown.
           TimeoutStopSec = 90;
         };
       }
@@ -98,8 +93,6 @@ let
     else
       [ a ];
 
-  # systemd binds the port as root, but the router runs as the user to read
-  # per-user state.
   routeSocket = {
     description = "sprout router socket";
     wantedBy = [ "sockets.target" ];
@@ -133,17 +126,14 @@ let
           + lib.optionalString (!cfg.route.wake) " --no-wake";
         Restart = "on-failure";
         RestartSec = 10;
-        # An instance the router woke runs its daemon in this unit's cgroup;
-        # the default would take it down with every router restart, a rebuild
-        # included.
+        # Woken daemons live in this unit's cgroup; the default would stop
+        # them on every router restart.
         KillMode = "process";
       };
     };
 
-  # What the router woke has no unit of its own, so without this it would
-  # meet systemd's final SIGTERM at shutdown alongside its runner, which then
-  # quits without a guest poweroff. Only stopping this unit stops them: a
-  # rebuild leaves it alone, and the router's restarts never touch it.
+  # Woken instances have no unit of their own; without this they meet
+  # systemd's final SIGTERM, which QEMU quits on without a guest poweroff.
   routeInstancesService =
     let
       user = resolveUser cfg.route.user;
@@ -164,9 +154,8 @@ let
         RemainAfterExit = true;
         ExecStart = "${pkgs.coreutils}/bin/true";
         ExecStop = "${sprout} stop --all";
-        # `stop --all` stops instances concurrently, so one instance's budget
-        # covers them all: up to 30s for a booting one to start serving, then
-        # its graceful stop.
+        # One instance's budget, since `stop --all` is concurrent: up to 30s
+        # (bootingServeWait) for a booting one, then its graceful stop.
         TimeoutStopSec = 120;
       };
     };
@@ -261,8 +250,8 @@ in
     };
   };
 
-  # The router is useful on its own — it reaches instances started by hand,
-  # which is the common case — so it must not require any supervised instance.
+  # The router also reaches hand-started instances, so it needs no supervised
+  # one.
   config = lib.mkIf (cfg.enable && (cfg.instances != { } || cfg.route.enable)) {
     systemd.services =
       lib.mapAttrs' daemon cfg.instances

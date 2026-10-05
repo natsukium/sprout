@@ -39,11 +39,8 @@ let
   # discovery reads.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
-  # What the sprout binary shells out to (git, ssh, `nix build` for GC roots,
-  # and `ps` for the orphan reaper): service jobs see only this PATH on top of
-  # their manager's default. launchd's default keeps macOS's /bin/ps, but a
-  # systemd unit's has no procps. Runners and sidecars carry their own closure
-  # and need nothing here.
+  # Service jobs see only this PATH on top of their manager's default, which on
+  # systemd lacks the `ps` the orphan reaper runs.
   hostTools =
     pkgs:
     [

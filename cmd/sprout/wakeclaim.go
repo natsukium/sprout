@@ -11,10 +11,8 @@ import (
 
 const claimFDEnv = "SPROUT_CLAIM_FD"
 
-// The forked daemon reports its own claim over a pipe only it holds, so the
-// router learns about that process and not whichever one holds the lock.
-// Cancelling refuses a launch still to come, so a router that has finished
-// waiting never forks one afterwards.
+// Cancelling refuses a launch still to come, so no fork follows a finished
+// settle.
 type wakeWatch struct {
 	claimed chan struct{}
 	exited  chan struct{}
@@ -58,11 +56,8 @@ func (w *wakeWatch) launch(start func(report *os.File) (*os.Process, error)) err
 	return nil
 }
 
-// A daemon still unclaimed at the deadline is terminated and reaped, so no
-// boot the router started can begin after the router has exited.
-//
-// The wake ending is not enough by itself: it also ends when the readiness
-// wait gives up, with the daemon still queued behind the old one's lock.
+// The wake ending is not enough: it also ends when the readiness wait gives
+// up, with the daemon still queued for the lock.
 func (w *wakeWatch) settle(deadline time.Time) {
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()

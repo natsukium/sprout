@@ -294,10 +294,8 @@ func TestAllAndInstanceAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// Options only a supervisor can satisfy stay out of help: nobody types a nix
-// store path or a service manager's socket name at a prompt, so listing them
-// offers only a way to get it wrong. They must still parse — the nix-darwin and
-// NixOS modules pass them — which is what separates hidden from removed.
+// Flags only a supervisor can satisfy stay out of help, yet still parse: the
+// nix-darwin and NixOS modules pass them.
 func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	for _, c := range []struct {
 		cmd  *cobra.Command
@@ -319,8 +317,7 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}
 }
 
-// A launchd job from an older nix-darwin module runs until the next rebuild
-// rewrites it, so the old spelling must still select the same socket.
+// A launchd job keeps the old spelling until the next darwin-rebuild.
 func TestLaunchdSocketSpellingStillNamesTheActivatedSocket(t *testing.T) {
 	cmd := newRouteServeCmd()
 	if err := cmd.ParseFlags([]string{"--launchd-socket", "Listeners"}); err != nil {
@@ -331,13 +328,11 @@ func TestLaunchdSocketSpellingStillNamesTheActivatedSocket(t *testing.T) {
 	}
 }
 
-// The nix-darwin and NixOS modules compose these command lines in Nix, where
-// nothing type-checks them against the CLI. A flag renamed here and missed
-// there fails at service start time, with the error in a log nobody watches.
+// The service modules build these command lines in Nix, where nothing
+// type-checks them against the CLI.
 func TestServiceCommandLinesStillParse(t *testing.T) {
-	// Kept verbatim from nix/darwin-module.nix's `command =` strings and
-	// nix/nixos-module.nix's ExecStart and ExecStop lines, which share them, with
-	// the store paths and names substituted.
+	// Verbatim from nix/darwin-module.nix and nix/nixos-module.nix, store paths
+	// substituted.
 	for _, c := range []struct {
 		argv     []string
 		wantPath string
