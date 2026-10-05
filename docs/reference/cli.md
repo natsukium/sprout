@@ -187,14 +187,15 @@ volumes (see [instance identity](../explanation/instances.md)).
 | `NAME` | The branch (or the name the instance was created under), unsanitized. |
 | `STATE` | See the state table below. |
 | `UPTIME` | Time since the daemon started, minute granularity. |
-| `CPU` | Host CPU the VM's process tree is using (a decaying average). |
-| `MEM` | Host memory the VM occupies (vfkit's footprint). |
+| `CPU` | Host CPU the VM's processes are using: a decaying average on macOS, the average over each process's lifetime on Linux. |
+| `MEM` | Host memory the VM occupies: vfkit's footprint on macOS, the proportional set size (PSS) of QEMU and its sidecars on Linux. |
 | `DISK` | Allocated (sparse) size of the guest's `/var` volume. |
 | `WORKSPACE` | The worktree the instance was booted from. |
 
 `CPU` and `MEM` are host-side occupancy, not guest-internal usage: `MEM` is how
 much host RAM the hypervisor holds, which rises to a high-water mark and does
-not shrink when the guest frees memory. To judge whether a guest could run with
+not shrink when the guest frees memory. On Linux, PSS splits guest RAM that
+QEMU shares with each virtiofsd between them, so it is counted once. To judge whether a guest could run with
 a smaller `mem` allocation, look inside it instead, e.g. `sprout exec -- free -m`.
 Both read `-` for a stopped instance, and when the sample failed.
 
