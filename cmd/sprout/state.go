@@ -44,8 +44,10 @@ type Manifest struct {
 	DNS struct {
 		WildcardDomains []string `json:"wildcardDomains,omitempty"`
 	} `json:"dns,omitempty"`
-	Credentials   []CredentialSpec `json:"credentials"`
-	Caches        []CacheSpec      `json:"caches"`
+	Credentials []CredentialSpec `json:"credentials"`
+	Caches      []CacheSpec      `json:"caches"`
+	// Empty in bundles that predate the field.
+	VarFsType     string `json:"varFsType,omitempty"`
 	Substitutions []struct {
 		Placeholder string `json:"placeholder"`
 		Value       string `json:"value"`

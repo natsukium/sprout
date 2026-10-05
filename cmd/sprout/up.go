@@ -530,9 +530,6 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 	if err := os.MkdirAll(sshDataDir(dir), 0o700); err != nil {
 		return err
 	}
-	if err := resetStaleHostTrust(dir); err != nil {
-		return err
-	}
 	sockDir, err := prepareSocketDir(socketDirBase(), dir)
 	if err != nil {
 		return err
@@ -545,6 +542,13 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 		return err
 	}
 	if err := awaitDiskReleased(dir); err != nil {
+		return err
+	}
+	if err := setAsideUnformattedImage(dir, manifest.VarFsType); err != nil {
+		return err
+	}
+	// After the two above, which can leave var.img missing.
+	if err := resetStaleHostTrust(dir); err != nil {
 		return err
 	}
 	if remedy := guestGitRemedy(manifest, inst); remedy != "" {

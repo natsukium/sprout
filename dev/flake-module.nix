@@ -362,6 +362,40 @@ in
               );
               expected = true;
             };
+            testANonExt4VarVolumeIsRefusedOnEveryBackend = {
+              expr =
+                map
+                  (
+                    host:
+                    refusedFor "/var volume must stay ext4" (
+                      withModule host (
+                        { lib, ... }:
+                        {
+                          microvm.volumes = lib.mkForce [
+                            {
+                              image = "var.img";
+                              mountPoint = "/var";
+                              size = 1024;
+                              fsType = "xfs";
+                            }
+                          ];
+                        }
+                      )
+                    )
+                  )
+                  [
+                    "x86_64-linux"
+                    "aarch64-darwin"
+                  ];
+              expected = [
+                true
+                true
+              ];
+            };
+            testTheDefaultVarVolumeIsNotRefused = {
+              expr = refusedFor "/var volume must stay ext4" (guestOn "x86_64-linux" { });
+              expected = false;
+            };
             testForcing2048MiBOnMicrovmIsRefused = {
               expr = refusedFor "exactly 2048 MiB" (
                 withModule "x86_64-linux" { microvm.mem = lib.mkForce 2048; }

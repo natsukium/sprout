@@ -38,7 +38,9 @@ a crashed daemon. On Linux the runner is started with `PDEATHSIG`, so a crashed
 daemon takes QEMU with it; the cleanup covers a runner that ignored it. The
 runner's own children are beyond both, so a Linux boot also waits for any
 other process holding `var.img`, such as a first boot's `mkfs` left by a
-crashed daemon, to close it.
+crashed daemon, to close it. An image a first boot left without a finished
+filesystem (no ext4 superblock) is moved to `var.img.unformatted-<time>` so the boot
+formats a fresh one.
 
 Concurrent `up`/`start` calls converge on the lock rather than failing: a
 caller that finds it held waits for the holder to start serving control, then

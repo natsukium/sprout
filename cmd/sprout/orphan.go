@@ -5,8 +5,10 @@ package main
 // var.img with no control socket to reach it by.
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,4 +207,50 @@ func awaitDiskReleased(dir string) error {
 		return nil
 	}
 	return fmt.Errorf("%s still has %s open after %s; booting now would share the disk with it, so stop it and retry", strings.Join(holders, ", "), img, diskReleaseWait)
+}
+
+const (
+	ext4MagicOffset = 1080
+	ext4Magic       = 0xef53
+)
+
+// microvm.nix's runner creates var.img and only then runs mkfs.ext4 on it,
+// skipping both whenever the file exists, so a first boot killed in between
+// leaves an image every later boot accepts and none can mount. mke2fs writes
+// the primary superblock last, so its magic marks a finished format. Moved
+// aside rather than deleted: a real disk whose superblock was damaged also
+// lacks it, and fsck can repair that from a backup copy. Any filesystem
+// other than ext4, or a bundle too old to declare one, has no such marker.
+func setAsideUnformattedImage(dir, fsType string) error {
+	if fsType != "ext4" {
+		return nil
+	}
+	img := varImagePath(dir)
+	f, err := os.Open(img)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var magic [2]byte
+	_, err = f.ReadAt(magic[:], ext4MagicOffset)
+	f.Close()
+	if err == nil && binary.LittleEndian.Uint16(magic[:]) == ext4Magic {
+		return nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	// Linked, not renamed: a rename would replace an image an earlier
+	// interrupted boot set aside.
+	aside := fmt.Sprintf("%s.unformatted-%s", img, time.Now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.Link(img, aside); err != nil {
+		return err
+	}
+	if err := os.Remove(img); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "warning: %s held no filesystem, which is what a first boot interrupted while formatting it leaves; moved it to %s so this boot formats a fresh one\n", img, aside)
+	return nil
 }

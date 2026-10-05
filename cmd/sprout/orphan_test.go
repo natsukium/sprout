@@ -262,3 +262,63 @@ func TestRunnerLogTail(t *testing.T) {
 		t.Errorf("missing log read as %q, want empty", got)
 	}
 }
+
+// An image the runner created but never finished formatting is moved aside so
+// the next runner formats a fresh one; a formatted one stays where it is.
+func TestSetAsideUnformattedImage(t *testing.T) {
+	dir := t.TempDir()
+	img := varImagePath(dir)
+	if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
+		t.Fatalf("no image: %v", err)
+	}
+
+	formatted := make([]byte, 4096)
+	formatted[1080], formatted[1081] = 0x53, 0xef
+	for name, content := range map[string][]byte{
+		"empty (created, never truncated)": nil,
+		"sparse (truncated, never mkfs'd)": make([]byte, 1<<20),
+	} {
+		if err := os.WriteFile(img, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := os.Stat(img); !os.IsNotExist(err) {
+			t.Errorf("%s image left in place, where the runner would boot it unformatted", name)
+		}
+	}
+	// Both interrupted images survive: a second set-aside must not replace
+	// the first, which may be a real disk with a damaged superblock.
+	if aside, _ := filepath.Glob(img + ".unformatted-*"); len(aside) != 2 {
+		t.Errorf("images kept aside = %v, want both", aside)
+	}
+
+	if err := os.WriteFile(img, formatted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(img); err != nil || len(got) != len(formatted) {
+		t.Fatalf("formatted image was moved or altered: %v", err)
+	}
+}
+
+// Without an ext4 declaration a missing magic proves nothing, so the image
+// is booted as it is rather than moved.
+func TestSetAsideLeavesImagesOfOtherOrUndeclaredFilesystems(t *testing.T) {
+	dir := t.TempDir()
+	img := varImagePath(dir)
+	if err := os.WriteFile(img, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, fsType := range []string{"", "xfs"} {
+		if err := setAsideUnformattedImage(dir, fsType); err != nil {
+			t.Fatalf("fsType %q: %v", fsType, err)
+		}
+		if _, err := os.Stat(img); err != nil {
+			t.Errorf("fsType %q: image moved: %v", fsType, err)
+		}
+	}
+}

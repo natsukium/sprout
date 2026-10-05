@@ -210,6 +210,21 @@ let
               interfaces = [ ];
             };
           }
+          (
+            { config, ... }:
+            {
+              assertions = [
+                {
+                  # The daemon reads the ext4 superblock to tell a finished
+                  # format from an interrupted one (cmd/sprout/orphan.go); any
+                  # other filesystem would be set aside as unformatted on
+                  # every boot.
+                  assertion = lib.all (v: v.image != "var.img" || v.fsType == "ext4") config.microvm.volumes;
+                  message = "sprout: the /var volume must stay ext4";
+                }
+              ];
+            }
+          )
           backend.module
           (import ./guest/credentials.nix {
             inherit guest dataMount;
@@ -249,6 +264,8 @@ let
         dns = { inherit (vmCfg.dns) wildcardDomains; };
         credentials = credManifest;
         caches = cacheManifest;
+        varFsType =
+          (lib.findFirst (v: v.image == "var.img") { fsType = null; } nixos.config.microvm.volumes).fsType;
         substitutions = [
           {
             placeholder = placeholders.data;
