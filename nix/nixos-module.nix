@@ -57,10 +57,13 @@ let
         path = hostTools;
         wantedBy = lib.optional supervised "multi-user.target";
         # Ordered after them so that at shutdown the guest powers off while
-        # the network and the nix daemon (for GC roots) are still up.
+        # the network and the nix daemon (for GC roots) are still up, and
+        # before the router's sweep, which would otherwise stop it from under
+        # its own unit.
         after = [
           "network.target"
           "nix-daemon.socket"
+          "sprout-route-instances.service"
         ];
         serviceConfig = {
           # The default `up` exits after readiness, so systemd requires
@@ -112,8 +115,12 @@ let
       # Wake re-execs `sprout start`, so it needs the daemon's host tools.
       path = hostTools;
       requires = [ "sprout-route.socket" ];
+      wants = [ "sprout-route-instances.service" ];
+      # After the sweep, so at shutdown the router stops waking instances
+      # before the sweep stops them.
       after = [
         "sprout-route.socket"
+        "sprout-route-instances.service"
         "network.target"
         "nix-daemon.socket"
       ];
@@ -127,6 +134,35 @@ let
         # the default would take it down with every router restart, a rebuild
         # included.
         KillMode = "process";
+      };
+    };
+
+  # What the router woke has no unit of its own, so without this it would
+  # meet systemd's final SIGTERM at shutdown alongside its runner, which then
+  # quits without a guest poweroff. Only stopping this unit stops them: a
+  # rebuild leaves it alone, and the router's restarts never touch it.
+  routeInstancesService =
+    let
+      user = resolveUser cfg.route.user;
+      home = resolveHome user cfg.route.home;
+    in
+    lib.recursiveUpdate (runAs user home) {
+      description = "Graceful stop of sprout instances the router woke";
+      path = hostTools;
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "network.target"
+        "nix-daemon.socket"
+      ];
+      restartIfChanged = false;
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.coreutils}/bin/true";
+        ExecStop = "${sprout} stop --all";
+        # `stop --all` stops instances concurrently, so one instance's budget
+        # covers them all.
+        TimeoutStopSec = 90;
       };
     };
 in
@@ -227,6 +263,7 @@ in
       lib.mapAttrs' daemon cfg.instances
       // lib.optionalAttrs cfg.route.enable {
         sprout-route = routeService;
+        sprout-route-instances = routeInstancesService;
       };
     systemd.sockets = lib.optionalAttrs cfg.route.enable {
       sprout-route = routeSocket;

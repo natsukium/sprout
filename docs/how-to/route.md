@@ -286,9 +286,13 @@ After `nixos-rebuild switch`, the `sprout-route.socket` unit holds the port and
 starts `sprout-route.service` on the first connection; the router logs to the
 journal (`journalctl -u sprout-route`). A restart of the router, a rebuild
 included, leaves the socket bound and leaves any instance it woke running.
-Those woken instances are not supervised, so host shutdown ends them along with
-everything else rather than through a graceful stop; declare an instance under
-`services.sprout.instances` when that matters.
+A woken instance has no unit of its own and is not restarted if it exits, but
+at host shutdown `sprout-route-instances.service` runs `sprout stop --all` as
+the router's user, after the router has stopped and before the network and the
+nix daemon do, so its guest powers off cleanly. That sweep also stops anything
+else that user left running; supervised instances have already stopped under
+their own units by then. Declare an instance under `services.sprout.instances`
+when it should come back after a crash or a reboot.
 
 `route.port`, `route.bindAddress`, `route.domain`, and `route.wake` mirror the
 command-line flags; `bindAddress` defaults to `localhost`, which covers both

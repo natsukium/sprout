@@ -714,3 +714,30 @@ func TestStopHardAbortsOnASwappedIncarnation(t *testing.T) {
 		t.Fatalf("the re-created instance got %v", got)
 	}
 }
+
+// Each call blocks until every other one has started, so run one at a time
+// they would never finish.
+func TestStopAllStopsInstancesConcurrently(t *testing.T) {
+	ids := []string{"a", "b", "c"}
+	var started sync.WaitGroup
+	started.Add(len(ids))
+	done := make(chan error, 1)
+	go func() {
+		done <- forEachOf(ids, func(id string) error {
+			started.Done()
+			started.Wait()
+			if id == "b" {
+				return errors.New("b failed")
+			}
+			return nil
+		})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "b failed") {
+			t.Errorf("err = %v, want b's failure reported", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stops ran one at a time")
+	}
+}

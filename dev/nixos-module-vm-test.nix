@@ -1,8 +1,8 @@
 # The NixOS module's units under a real systemd, without booting a guest: a
 # guest inside this test VM would need nested KVM, so instances run with their
-# ExecStart swapped for stand-ins. The router is the real binary on real
-# systemd-owned sockets. A full boot through the module is
-# nix/tests/nixos-module-boot.nix.
+# ExecStart swapped for stand-ins, as is the router sweep's ExecStop. The
+# router is the real binary on real systemd-owned sockets. A full boot through
+# the module, router wake and sweep included, is nixos-module-boot-test.nix.
 { inputs }:
 pkgs:
 let
@@ -29,6 +29,25 @@ let
   standInFor = priority: arg: {
     serviceConfig.ExecStart = pkgs.lib.mkOverride priority "${standIn} ${arg}";
   };
+
+  # A daemon the router woke: it lives in the router's cgroup and has no unit
+  # of its own, so the only graceful stop it can get is the sweep's.
+  wokenStandIn = pkgs.writeShellScript "sprout-woken-stand-in" ''
+    echo $$ >"$HOME/woken.pid"
+    trap '
+      if [ -e "$HOME/swept" ]; then echo woken-stopped-by-sweep; else echo woken-signalled-by-another; fi >>"$HOME/woken.log"
+      exit 0
+    ' TERM
+    while :; do sleep 0.2 & wait $!; done
+  '';
+  sweepStandIn = pkgs.writeShellScript "sprout-stop-all-stand-in" ''
+    state() { systemctl is-active "$1" || true; }
+    echo "sweep router=$(state sprout-route.service) network=$(state network.target) nix=$(state nix-daemon.socket) graceful=$(state sprout-graceful.service)" >>"$HOME/woken.log"
+    touch "$HOME/swept"
+    pid=$(cat "$HOME/woken.pid")
+    kill -TERM "$pid"
+    while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "sprout-nixos-module";
@@ -53,6 +72,7 @@ pkgs.testers.runNixOSTest {
       # failed boot does: a non-zero exit before readiness.
       systemd.services.sprout-broken.serviceConfig.ExecStart =
         lib.mkForce "${sprout}/bin/sprout up --foreground --bundle /nonexistent-bundle --instance broken";
+      systemd.services.sprout-route-instances.serviceConfig.ExecStop = lib.mkForce sweepStandIn;
 
       specialisation.rebuilt.configuration.systemd.services = {
         sprout-graceful = standInFor 40 "v2";
@@ -87,6 +107,17 @@ pkgs.testers.runNixOSTest {
         code = machine.succeed("curl -s -o /dev/null -w '%{http_code}' -H 'Host: nope.sprout.localhost' http://127.0.0.1/")
         assert code == "404", code
 
+    with subtest("what the router woke outlives the router's restarts"):
+        machine.succeed("su - alice -c '${pkgs.util-linux}/bin/setsid ${wokenStandIn} >/dev/null 2>&1 &'")
+        machine.wait_until_succeeds("test -s /home/alice/woken.pid")
+        woken = machine.succeed("cat /home/alice/woken.pid").strip()
+        cgroup = machine.succeed("systemctl show -p ControlGroup --value sprout-route.service").strip()
+        machine.succeed(f"echo {woken} > /sys/fs/cgroup{cgroup}/cgroup.procs")
+        machine.succeed("systemctl restart sprout-route.service")
+        machine.succeed(f"kill -0 {woken}")
+        machine.succeed("systemctl is-active sprout-route-instances.service")
+        machine.fail("test -e /home/alice/woken.log")
+
     with subtest("an instance starts at boot as alice with the host tools on PATH"):
         machine.wait_until_succeeds(f"grep -qx 'start alice v1' {instance_log}")
         machine.fail(f"grep -q missing {instance_log}")
@@ -113,12 +144,18 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(f"grep -qx 'start alice v2' {instance_log}")
         assert machine.succeed(f"grep -cx 'stopped v1' {instance_log}").strip() == "2"
         machine.fail(f"grep -q runner-signalled-directly {instance_log}")
+        machine.succeed(f"kill -0 {woken}")
+        machine.fail("test -e /home/alice/woken.log")
 
-    with subtest("host shutdown stops the instance gracefully"):
+    with subtest("host shutdown stops supervised and router-woken instances gracefully"):
+        machine.succeed("curl -s -o /dev/null -H 'Host: nope.sprout.localhost' http://127.0.0.1/")
         machine.shutdown()
         machine.start()
         machine.wait_for_unit("multi-user.target")
         machine.succeed(f"grep -qx 'stopped v2' {instance_log}")
         machine.fail(f"grep -q runner-signalled-directly {instance_log}")
+        machine.succeed("grep -qx 'sweep router=inactive network=active nix=active graceful=inactive' /home/alice/woken.log")
+        machine.succeed("grep -qx woken-stopped-by-sweep /home/alice/woken.log")
+        machine.fail("grep -q woken-signalled-by-another /home/alice/woken.log")
   '';
 }

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -418,11 +419,15 @@ func readerEchoesInput(r io.Reader) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+// Concurrent because a service manager's stop timeout runs `stop --all` at host
+// shutdown: one at a time, N guests powering off would need N stop budgets.
 func forEachOf(ids []string, fn func(id string) error) error {
-	var errs []error
-	for _, id := range ids {
-		errs = append(errs, fn(id))
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Go(func() { errs[i] = fn(id) })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

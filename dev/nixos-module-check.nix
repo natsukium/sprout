@@ -61,6 +61,7 @@ let
   runner = (host { instances.runner = { }; }).systemd.services.sprout-runner;
   routed = host { route.enable = true; };
   route = routed.systemd.services.sprout-route;
+  sweep = routed.systemd.services.sprout-route-instances;
   routeSocket = routed.systemd.sockets.sprout-route;
   socketArg = lib.last (lib.splitString "--activated-socket " route.serviceConfig.ExecStart);
 
@@ -236,6 +237,48 @@ let
     testRouterRestartLeavesWokenInstancesRunning = {
       expr = route.serviceConfig.KillMode;
       expected = "process";
+    };
+    testWokenInstancesGetAGracefulStopAtShutdown = {
+      expr = {
+        inherit (sweep) wantedBy restartIfChanged;
+        inherit (sweep.serviceConfig)
+          User
+          Type
+          RemainAfterExit
+          TimeoutStopSec
+          ;
+        stopsEveryInstance = lib.hasSuffix "/bin/sprout stop --all" sweep.serviceConfig.ExecStop;
+        stopsBeforeNetworkAndNix = map (u: builtins.elem u sweep.after) [
+          "network.target"
+          "nix-daemon.socket"
+        ];
+        routerStopsWakingFirst = builtins.elem "sprout-route-instances.service" route.after;
+        routerPullsItIn = route.wants;
+        supervisedInstancesStopThemselvesFirst = builtins.elem "sprout-route-instances.service" runner.after;
+        hostTools = pathHas sweep (toolsOn "x86_64-linux");
+      };
+      expected = {
+        wantedBy = [ "multi-user.target" ];
+        restartIfChanged = false;
+        User = "alice";
+        Type = "oneshot";
+        RemainAfterExit = true;
+        TimeoutStopSec = 90;
+        stopsEveryInstance = true;
+        stopsBeforeNetworkAndNix = [
+          true
+          true
+        ];
+        routerStopsWakingFirst = true;
+        routerPullsItIn = [ "sprout-route-instances.service" ];
+        supervisedInstancesStopThemselvesFirst = true;
+        hostTools = [
+          true
+          true
+          true
+          true
+        ];
+      };
     };
     testRouterFlagsFollowTheOptions = {
       expr =

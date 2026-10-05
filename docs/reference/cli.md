@@ -83,7 +83,7 @@ identity](../explanation/instances.md) for default identity derivation.
 | `--verbose` | `route serve` | Log one line per request to stderr: the `Host` received, the request line, and what it resolved to (the instance and guest port it was bridged to, or the status the router answered with itself). |
 | `--domain SUFFIX` | `route serve`, `open` | Hostname suffix to route; default `sprout.localhost`. |
 | `--host-prefix LABELS` | `open` | Hostname labels to place in front of the instance name, for a guest that routes by `Host` itself (`--host-prefix admin.dev` → `http://admin.dev.<name>.sprout.localhost/`). A `GUESTPORT` operand stays leftmost, the only position the router reads it in. |
-| `--activated-socket NAME` | `route serve` | Serve the sockets the service manager bound under this name instead of binding one: a launchd `Sockets` key on macOS, a systemd `FileDescriptorName` (`LISTEN_FDS`/`LISTEN_FDNAMES`) on Linux. It is the way to loopback `:80` without running the router as root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from the service manager, so it refuses `--port`/`--bind`. |
+| `--activated-socket NAME` | `route serve` | Serve the sockets the service manager bound under this name instead of binding one: a launchd `Sockets` key on macOS, a systemd `FileDescriptorName` (`LISTEN_FDS`/`LISTEN_FDNAMES`) on Linux. It is the way to loopback `:80` without running the router as root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from the service manager, so it refuses `--port`/`--bind`. `--launchd-socket NAME`, its former name, still works as a deprecated alias so launchd jobs written before the rename keep serving until the next rebuild. |
 | `--force` | `delete`, `prune`, `snapshot restore` | Skip the confirmation prompt. It suppresses only the prompt: the set of things acted on is unchanged. |
 | `--quiet`, `-q` | `list` | Print only instance IDs, one per line, for scripting. |
 | `--print` | `open` | Print the URL instead of opening it, for piping into curl or a script. |
@@ -114,7 +114,10 @@ environments. Either flag is rejected alongside `-i` (and alongside the other)
 rather than resolved one way or the other: a command line naming two scopes,
 or a scope and a target, has no reading that is obviously what was meant.
 
-`stop --all` keeps every persistent volume, so it does not ask. `delete --all`
+`stop --all` keeps every persistent volume, so it does not ask, and it stops
+the selected instances concurrently, so the whole set takes about as long as
+its slowest guest poweroff; that is what lets the NixOS module run it within a
+fixed timeout at host shutdown. `delete --all`
 lists the target set and asks once before destroying it:
 
 ```console

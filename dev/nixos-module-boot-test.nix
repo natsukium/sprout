@@ -1,4 +1,4 @@
-# A real guest booted, restarted and stopped through the NixOS module's unit.
+# Real guests booted, restarted, woken and stopped through the NixOS module.
 # The guest runs inside the test VM, so the builder must offer nested KVM; that
 # keeps this out of `checks` (see nixos-module-vm-test.nix for the part that
 # needs none). Run it with `nix build .#legacyPackages.x86_64-linux.nixosTests.module-boot`.
@@ -18,7 +18,10 @@ pkgs.testers.runNixOSTest {
       diskSize = 4096;
     };
     users.users.alice.isNormalUser = true;
-    environment.systemPackages = [ sprout ];
+    environment.systemPackages = [
+      sprout
+      pkgs.curl
+    ];
     nix.settings.experimental-features = [
       "nix-command"
       "flakes"
@@ -27,10 +30,17 @@ pkgs.testers.runNixOSTest {
     services.sprout = {
       enable = true;
       user = "alice";
+      route.enable = true;
       instances.runner = {
         vcpu = 1;
         mem = 1024;
         idle.action = "none";
+      };
+      instances.woken = {
+        vcpu = 1;
+        mem = 1024;
+        idle.action = "none";
+        autoStart = false;
       };
     };
   };
@@ -62,5 +72,28 @@ pkgs.testers.runNixOSTest {
         machine.succeed("grep -rq 'System Power Off' /home/alice/.local/state/sprout/instances")
         machine.fail("grep -rq 'forcing stop' /home/alice/.local/state/sprout/instances")
         machine.fail("ps -eo comm= | grep -q qemu")
+
+    with subtest("a request wakes a stopped instance inside the router's unit"):
+        machine.succeed("systemctl start sprout-woken.service")
+        machine.wait_until_succeeds("journalctl -u sprout-woken.service -o cat | grep -q '^VM ready'")
+        machine.succeed("systemctl stop sprout-woken.service")
+        machine.succeed("curl -s -o /dev/null -H 'Host: woken.sprout.localhost' http://127.0.0.1/")
+        machine.wait_until_succeeds("su - alice -c 'sprout exec --instance woken -- true'")
+        cgroups = machine.succeed(
+            "ps -eo pid=,comm= | awk '/qemu/ {print $1}' | xargs -I{} cat /proc/{}/cgroup"
+        )
+        assert "sprout-route.service" in cgroups, f"the woken runner is not the router's: {cgroups}"
+
+    woken_dir = machine.succeed(
+        "dirname $(grep -l '\"woken\"' /home/alice/.local/state/sprout/instances/*/instance.json)"
+    ).strip()
+
+    with subtest("host shutdown powers a router-woken guest off"):
+        machine.fail(f"grep -q 'System Power Off' {woken_dir}/console.log")
+        machine.shutdown()
+        machine.start()
+        machine.wait_for_unit("multi-user.target")
+        machine.succeed(f"grep -q 'System Power Off' {woken_dir}/console.log")
+        machine.succeed("journalctl -b -1 -u sprout-route-instances.service -o cat | grep -q 'instance \"woken\" stopped'")
   '';
 }
