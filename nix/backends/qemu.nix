@@ -91,7 +91,7 @@ in
         # skips it: that one marks the file No_COW, and btrfs refuses to
         # reflink a No_COW file, so every snapshot and fork would be a full
         # copy and `--live` would be refused.
-        preStart = lib.optionalString (varVolume != null) ''
+        preStart = lib.optionalString (varVolume != null && varVolume.autoCreate) ''
           if [ ! -e var.img ]; then
             ${hostPkgs.coreutils}/bin/truncate -s ${toString varVolume.size}M var.img
             ${hostPkgs.e2fsprogs}/bin/mkfs.ext4 ${

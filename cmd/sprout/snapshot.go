@@ -174,7 +174,7 @@ func copyVarImage(src, dst string, live bool) (cow bool, err error) {
 	if err := cowClone(src, dst); err != nil {
 		if errors.Is(err, errCoWUnsupported) {
 			if markedNoCoW(src) {
-				return false, fmt.Errorf("%s is marked No_COW (chattr +C), which rules out copy-on-write clones, so a running instance's image cannot be copied atomically; stop the instance and retry without --live, then restore that snapshot once to replace the image with one that clones", src)
+				return false, fmt.Errorf("%s is marked No_COW (chattr +C), which rules out copy-on-write clones, so a running instance's image cannot be copied atomically; stop the instance and retry without --live; once it is stopped, creating and restoring a snapshot replaces the image with one that clones, after which --live works", src)
 			}
 			return false, fmt.Errorf("%s is on a filesystem without copy-on-write clones, so a running instance's image cannot be copied atomically; stop the instance and retry without --live", filepath.Dir(src))
 		}
