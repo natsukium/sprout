@@ -289,7 +289,10 @@ included, leaves the socket bound and leaves any instance it woke running.
 A woken instance has no unit of its own and is not restarted if it exits, but
 at host shutdown `sprout-route-instances.service` runs `sprout stop --all` as
 the router's user, after the router has stopped and before the network and the
-nix daemon do, so its guest powers off cleanly. That sweep also stops anything
+nix daemon do, so its guest powers off cleanly. A router told to stop first
+waits (briefly) until each wake it started has claimed its instance, and the
+sweep waits for a claimed instance that is still booting, so a wake that
+races the shutdown is stopped too. That sweep also stops anything
 else that user left running; supervised instances have already stopped under
 their own units by then. Declare an instance under `services.sprout.instances`
 when it should come back after a crash or a reboot.

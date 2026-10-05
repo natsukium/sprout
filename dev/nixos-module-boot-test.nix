@@ -13,7 +13,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = {
     imports = [ inputs.self.nixosModules.default ];
     virtualisation = {
-      memorySize = 3072;
+      memorySize = 4096;
       cores = 2;
       diskSize = 4096;
     };
@@ -94,6 +94,13 @@ pkgs.testers.runNixOSTest {
         machine.start()
         machine.wait_for_unit("multi-user.target")
         machine.succeed(f"grep -q 'System Power Off' {woken_dir}/console.log")
+        machine.succeed("journalctl -b -1 -u sprout-route-instances.service -o cat | grep -q 'instance \"woken\" stopped'")
+
+    with subtest("host shutdown right after a wake still stops the booting guest"):
+        machine.succeed("curl -s -o /dev/null -H 'Host: woken.sprout.localhost' http://127.0.0.1/")
+        machine.shutdown()
+        machine.start()
+        machine.wait_for_unit("multi-user.target")
         machine.succeed("journalctl -b -1 -u sprout-route-instances.service -o cat | grep -q 'instance \"woken\" stopped'")
   '';
 }

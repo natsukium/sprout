@@ -59,10 +59,12 @@ let
         # Ordered after them so that at shutdown the guest powers off while
         # the network and the nix daemon (for GC roots) are still up, and
         # before the router's sweep, which would otherwise stop it from under
-        # its own unit.
+        # its own unit. The daemon's service is named as well as its socket:
+        # the socket outlives it at shutdown and cannot start it again.
         after = [
           "network.target"
           "nix-daemon.socket"
+          "nix-daemon.service"
           "sprout-route-instances.service"
         ];
         serviceConfig = {
@@ -123,6 +125,7 @@ let
         "sprout-route-instances.service"
         "network.target"
         "nix-daemon.socket"
+        "nix-daemon.service"
       ];
       serviceConfig = {
         ExecStart =
@@ -153,6 +156,7 @@ let
       after = [
         "network.target"
         "nix-daemon.socket"
+        "nix-daemon.service"
       ];
       restartIfChanged = false;
       serviceConfig = {
@@ -161,8 +165,9 @@ let
         ExecStart = "${pkgs.coreutils}/bin/true";
         ExecStop = "${sprout} stop --all";
         # `stop --all` stops instances concurrently, so one instance's budget
-        # covers them all.
-        TimeoutStopSec = 90;
+        # covers them all: up to 30s for a booting one to start serving, then
+        # its graceful stop.
+        TimeoutStopSec = 120;
       };
     };
 in

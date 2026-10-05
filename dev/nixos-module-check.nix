@@ -106,8 +106,10 @@ let
       expr = map (u: builtins.elem u runner.after) [
         "network.target"
         "nix-daemon.socket"
+        "nix-daemon.service"
       ];
       expected = [
+        true
         true
         true
       ];
@@ -251,8 +253,10 @@ let
         stopsBeforeNetworkAndNix = map (u: builtins.elem u sweep.after) [
           "network.target"
           "nix-daemon.socket"
+          "nix-daemon.service"
         ];
         routerStopsWakingFirst = builtins.elem "sprout-route-instances.service" route.after;
+        routerStopsBeforeNix = builtins.elem "nix-daemon.service" route.after;
         routerPullsItIn = route.wants;
         supervisedInstancesStopThemselvesFirst = builtins.elem "sprout-route-instances.service" runner.after;
         hostTools = pathHas sweep (toolsOn "x86_64-linux");
@@ -263,13 +267,15 @@ let
         User = "alice";
         Type = "oneshot";
         RemainAfterExit = true;
-        TimeoutStopSec = 90;
+        TimeoutStopSec = 120;
         stopsEveryInstance = true;
         stopsBeforeNetworkAndNix = [
           true
           true
+          true
         ];
         routerStopsWakingFirst = true;
+        routerStopsBeforeNix = true;
         routerPullsItIn = [ "sprout-route-instances.service" ];
         supervisedInstancesStopThemselvesFirst = true;
         hostTools = [
