@@ -48,11 +48,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { system: x86_64-linux, runner: ubuntu-24.04 }
-          - { system: aarch64-linux, runner: ubuntu-24.04-arm }
+          # Only x86_64-linux carries the NixOS test check, and only its
+          # runner exposes /dev/kvm.
+          - { system: x86_64-linux, runner: ubuntu-24.04, kvm: true }
+          - { system: aarch64-linux, runner: ubuntu-24.04-arm, kvm: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The action installs a udev rule opening /dev/kvm before installing Nix
+      # (its enable_kvm input, on by default). Nix would also detect kvm on
+      # its own, but declaring the features makes a missing /dev/kvm fail the
+      # test loudly instead of leaving the check unbuildable.
       - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+        with:
+          nix_conf: ${{ matrix.kvm && 'system-features = nixos-test benchmark big-parallel kvm' || '' }}
+      - if: matrix.kvm
+        run: test -r /dev/kvm -a -w /dev/kvm
       - uses: Mic92/niks3-action@12d3e320b2a99b7938f9634bd337cd9fec104609 # v1.1.0
         with:
           server-url: https://niks3.natsukium.com
