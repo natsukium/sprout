@@ -772,6 +772,8 @@ func sidecarsMention(sidecars []SidecarSpec, placeholder string) bool {
 }
 
 func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sidecarSpecs []SidecarSpec, socks instanceSockets) error {
+	sigCh := watchStopSignals()
+	defer signal.Stop(sigCh)
 	defer removeSocketFiles([]string{socks.net, socks.control})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -806,6 +808,9 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	removeSocketFiles(runtimeSocks)
 	defer removeSocketFiles(runtimeSocks)
 
+	if err := stopBeforeBoot(sigCh, inst.Name); err != nil {
+		return err
+	}
 	sidecars, err := startSidecars(sidecarSpecs, socks, dir)
 	if err != nil {
 		return err
@@ -814,6 +819,9 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	// first would pull a share from under a running guest.
 	defer sidecars.stop()
 
+	if err := stopBeforeBoot(sigCh, inst.Name); err != nil {
+		return err
+	}
 	cmd := exec.Command(runScript)
 	cmd.Dir = dir
 	cmd.Stdout = output
@@ -849,9 +857,6 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 		// idle time.
 		startIdleWatch(ctx, m, srv)
 	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	lost := awaitRunnerExit(sigCh, sidecars.exited(), exit, func() { srv.stopOnce.Do(stop) })
 	err = exit.err
@@ -999,6 +1004,29 @@ func (e *runnerExit) within(d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
+	}
+}
+
+// Installed before the daemon starts anything: a SIGTERM taking Go's default
+// action would end sprout with the runner already up, and PDEATHSIG would
+// then hand QEMU the SIGTERM it quits on without a guest poweroff. A signal
+// received before the runner exists stays buffered here until awaitRunnerExit
+// turns it into a graceful stop.
+func watchStopSignals() chan os.Signal {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	return sigCh
+}
+
+// Nothing has booted yet, so a stop requested now is honoured by not booting.
+// An error, not a clean exit: a detached `up` reads a clean exit before
+// readiness as a handoff to a running daemon.
+func stopBeforeBoot(sigCh <-chan os.Signal, name string) error {
+	select {
+	case sig := <-sigCh:
+		return fmt.Errorf("received %s before instance %q booted; not booting it", sig, name)
+	default:
+		return nil
 	}
 }
 

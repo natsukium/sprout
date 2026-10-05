@@ -117,14 +117,22 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 
 	fmt.Printf("routing %s → instances on %s (Ctrl-C to stop)\n", routeURLTemplate(dom, r.port), where)
 
+	// Before the first accept: a request may start a wake, and a SIGTERM taking
+	// Go's default action would then exit without settleWakes waiting for it.
+	sigCh := watchStopSignals()
+	defer signal.Stop(sigCh)
+	beforeRouteServe()
 	for _, ln := range lns {
 		go r.serve(ln)
 	}
 
-	awaitInterrupt(lns, "stopped routing")
+	awaitInterrupt(sigCh, lns, "stopped routing")
 	r.settleWakes(wakeSettleWait)
 	return nil
 }
+
+// A test hook: what runs here falls between the handler and the first accept.
+var beforeRouteServe = func() {}
 
 var wakeSettleWait = 15 * time.Second
 
@@ -169,9 +177,7 @@ func wakeClaimed(id string) bool {
 	return daemonLockHeld(dir)
 }
 
-func awaitInterrupt(lns []net.Listener, stopped string) {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+func awaitInterrupt(sigCh <-chan os.Signal, lns []net.Listener, stopped string) {
 	<-sigCh
 	closeAll(lns)
 	fmt.Println("\n" + stopped)
