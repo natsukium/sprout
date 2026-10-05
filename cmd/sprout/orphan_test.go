@@ -268,7 +268,7 @@ func TestRunnerLogTail(t *testing.T) {
 func TestSetAsideUnformattedImage(t *testing.T) {
 	dir := t.TempDir()
 	img := varImagePath(dir)
-	if err := setAsideUnformattedImage(dir); err != nil {
+	if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
 		t.Fatalf("no image: %v", err)
 	}
 
@@ -281,7 +281,7 @@ func TestSetAsideUnformattedImage(t *testing.T) {
 		if err := os.WriteFile(img, content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := setAsideUnformattedImage(dir); err != nil {
+		if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if _, err := os.Stat(img); !os.IsNotExist(err) {
@@ -297,10 +297,28 @@ func TestSetAsideUnformattedImage(t *testing.T) {
 	if err := os.WriteFile(img, formatted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := setAsideUnformattedImage(dir); err != nil {
+	if err := setAsideUnformattedImage(dir, "ext4"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(img); err != nil || len(got) != len(formatted) {
 		t.Fatalf("formatted image was moved or altered: %v", err)
+	}
+}
+
+// Without an ext4 declaration a missing magic proves nothing, so the image
+// is booted as it is rather than moved.
+func TestSetAsideLeavesImagesOfOtherOrUndeclaredFilesystems(t *testing.T) {
+	dir := t.TempDir()
+	img := varImagePath(dir)
+	if err := os.WriteFile(img, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, fsType := range []string{"", "xfs"} {
+		if err := setAsideUnformattedImage(dir, fsType); err != nil {
+			t.Fatalf("fsType %q: %v", fsType, err)
+		}
+		if _, err := os.Stat(img); err != nil {
+			t.Errorf("fsType %q: image moved: %v", fsType, err)
+		}
 	}
 }

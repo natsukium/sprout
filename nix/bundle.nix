@@ -264,6 +264,8 @@ let
         dns = { inherit (vmCfg.dns) wildcardDomains; };
         credentials = credManifest;
         caches = cacheManifest;
+        varFsType =
+          (lib.findFirst (v: v.image == "var.img") { fsType = null; } nixos.config.microvm.volumes).fsType;
         substitutions = [
           {
             placeholder = placeholders.data;

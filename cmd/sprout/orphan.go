@@ -222,7 +222,12 @@ const (
 // the primary superblock last, so its magic marks a finished format. Moved
 // aside rather than deleted: a real disk whose superblock was damaged also
 // lacks it, and fsck can repair that from a backup copy.
-func setAsideUnformattedImage(dir string) error {
+// Only for an image the bundle declares ext4: any other filesystem, or a
+// bundle too old to say, has no magic to tell a healthy disk apart.
+func setAsideUnformattedImage(dir, fsType string) error {
+	if fsType != "ext4" {
+		return nil
+	}
 	img := varImagePath(dir)
 	f, err := os.Open(img)
 	if os.IsNotExist(err) {

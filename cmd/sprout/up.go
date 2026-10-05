@@ -544,7 +544,7 @@ func bootInstanceLocked(dir string, inst *Instance, manifest *Manifest, lock *os
 	if err := awaitDiskReleased(dir); err != nil {
 		return err
 	}
-	if err := setAsideUnformattedImage(dir); err != nil {
+	if err := setAsideUnformattedImage(dir, manifest.VarFsType); err != nil {
 		return err
 	}
 	// After the two above, which can leave var.img missing.
