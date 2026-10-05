@@ -234,8 +234,9 @@ normal `idle.after` schedule and the next visit wakes it again.
 
 ## The port 80 problem
 
-A non-root process may not bind a privileged port (below 1024) on either
-host, so the bare `sprout route serve` above fails on its default port 80. The
+On either host a non-root process may not bind a privileged port (below 1024)
+on the router's default loopback address, so the bare `sprout route serve`
+above fails on its default port 80. The
 remedies differ per host, and the command prints the ones that apply when the
 bind fails.
 

@@ -16,7 +16,8 @@ This guide moves an existing project and its instances across.
 | Hosts the flake-parts module builds for | `aarch64-darwin`, if listed in `systems` | every supported host listed in `systems`: `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `lib.mkVMs` result | the whole output | one host's slice, which you nest under that host's system |
 | `manifest.json` | version 1: vfkit implied | version 2: `host.system`, `guest.system`, and a `backend` (kind, network transport, control protocol, console mode, sidecars) |
-| `instance.json`, `snapshot.json` | version 1, no platform | version 2, recording host, guest, and backend |
+| `instance.json` | version 1, no platform | version 2, recording host, guest, and backend |
+| `snapshot.json` | no version field, no platform | version 2, recording host, guest, and backend |
 | VM option | — | [`backend`](../reference/configuration.md#options), default `"auto"` |
 
 `<system>` is the system of the host that runs `sprout`, not the guest's:

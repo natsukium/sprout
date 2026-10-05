@@ -3,8 +3,10 @@
 Boot your first microVM, run a command inside it, open a shell, and delete the
 instance.
 
-You need Nix with flakes enabled, an `ssh` client on `PATH`, and one of the
-hosts below. The guest is a NixOS system of the host's CPU architecture; the
+You need Nix with flakes enabled and one of the hosts below. sprout installed
+with Nix carries its own `git`, which it puts ahead of a `/usr/bin` stub, and
+an OpenSSH it uses only when no `ssh` is on `PATH`; a plain `go build` relies
+on both being installed. The guest is a NixOS system of the host's CPU architecture; the
 [compatibility reference](../reference/compatibility.md#supported-platforms)
 has the full mapping and what is out of scope.
 

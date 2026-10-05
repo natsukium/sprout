@@ -71,8 +71,9 @@ together with its project configuration.
 
 The generated `manifest.json`, each `instance.json`, and each `snapshot.json`
 carry an explicit schema version. This release writes version 2 of all three.
-It still reads version 1 on `aarch64-darwin`, the only host that could produce
-it, as the vfkit backend it always was, so existing Darwin bundles, instances,
+It still reads the earlier formats (version 1 manifests and instance records,
+and snapshot records with no version field) on `aarch64-darwin`, the only
+host that could produce them, as the vfkit backend it always was, so existing Darwin bundles, instances,
 and snapshots keep working; elsewhere a version-1 manifest asks for a rebuild
 with a sprout flake that emits version 2, and a version-1 record asks for a
 delete. A newer version is rejected before a VM is started with a request to
