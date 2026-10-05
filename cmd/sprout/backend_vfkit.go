@@ -30,7 +30,6 @@ func (vfkitUnixgram) serve(ctx context.Context, vn *virtualnetwork.VirtualNetwor
 	go func() {
 		<-ctx.Done()
 		ln.Close()
-		_ = os.Remove(netSock)
 	}()
 	accept := func() (net.Conn, error) { return transport.AcceptVfkit(ln) }
 	go serveNICSessions(ctx, "vfkit", accept, vn.AcceptVfkit)

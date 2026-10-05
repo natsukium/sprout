@@ -412,7 +412,9 @@ func TestVfkitFramesQueuedDuringASessionOpenNoSecondSession(t *testing.T) {
 	}
 }
 
-func TestQemuStreamRemovesItsSocketOnShutdown(t *testing.T) {
+// A listener shut down by its daemon's cancel must not unlink the path after
+// the fact: by then a newer daemon may have bound its own socket there.
+func TestQemuStreamShutdownLeavesARebindingDaemonsSocket(t *testing.T) {
 	if inChildProcess(t) {
 		return
 	}
@@ -427,17 +429,19 @@ func TestQemuStreamRemovesItsSocketOnShutdown(t *testing.T) {
 	if fi, err := os.Stat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("socket = %v, %v; want a 0600 socket", fi, err)
 	}
-	cancel()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(sock); os.IsNotExist(err) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("socket still present after the network shut down")
-		}
-		time.Sleep(10 * time.Millisecond)
+	removeSocketFiles([]string{sock})
+	newer, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer newer.Close()
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("the shut-down listener removed the newer daemon's socket: %v", err)
+	}
+	conn.Close()
 }
 
 // Re-runs the calling test in a child process and reports whether the caller

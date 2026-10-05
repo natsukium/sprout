@@ -213,6 +213,7 @@ func TestSocketDirSeparatesSameIDInstancesOfTwoStateRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopB()
+	removeSocketFiles([]string{socksB.control})
 	bSock := filepath.Join(dirB, socketSubdir, controlSocketName)
 	if !pollUntil(2*time.Second, 10*time.Millisecond, func() bool {
 		_, err := os.Lstat(bSock)
