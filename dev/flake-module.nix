@@ -7,11 +7,27 @@
 }:
 let
   credentialHostCheck = import ./credential-host-check.nix { inherit inputs lib; };
+  nixosModuleCheck = import ./nixos-module-check.nix { inherit inputs lib; };
+  nixosModuleVMTest = import ./nixos-module-vm-test.nix { inherit inputs; };
+  nixosModuleBootTest = import ./nixos-module-boot-test.nix { inherit inputs; };
 in
 {
   imports = [
     inputs.treefmt-nix.flakeModule
     inputs.git-hooks.flakeModule
+    # The CI x86_64-linux runner is the only one with /dev/kvm.
+    {
+      perSystem =
+        { pkgs, system, ... }:
+        {
+          checks = lib.optionalAttrs (system == "x86_64-linux") {
+            nixos-module-vm = nixosModuleVMTest pkgs;
+          };
+          legacyPackages.nixosTests = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            module-boot = nixosModuleBootTest pkgs;
+          };
+        };
+    }
   ];
 
   perSystem =
@@ -43,6 +59,7 @@ in
       # host-specific build break would otherwise pass.
       checks.sprout = config.packages.sprout;
       checks.credential-host = credentialHostCheck pkgs;
+      checks.nixos-module = nixosModuleCheck pkgs;
 
       checks.guest-host-gating =
         let

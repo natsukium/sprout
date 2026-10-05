@@ -43,8 +43,8 @@ Starting a development environment should not occupy a terminal, so console
 output is a separate, composable operation: ` + "`sprout logs --follow`" + `.
 
 --foreground instead runs the daemon in this process, which is what a
-supervisor (launchd, via services.sprout) needs: it must own a process that
-lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
+supervisor (launchd or systemd, via services.sprout) needs: it must own a
+process that lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
 		Args: usageArgs(noPositionals),
 	}
 	selector := addInstanceFlag(cmd)
@@ -126,7 +126,7 @@ func upChildArgs(id, selector, def, flakeRef, bundle string) []string {
 
 // The child *is* the daemon, so the reaping awaitBootOrReady does while racing
 // its exit is what keeps a long-lived caller from collecting zombies.
-func bootDetached(id string, childArgs []string, supersededPID int, what string, createDir bool, announce func(logPath string)) error {
+func bootDetached(id string, childArgs []string, supersededPID int, what string, createDir bool, announce func(logPath string), watch *wakeWatch) error {
 	dir, err := instanceDir(id)
 	if err != nil {
 		return err
@@ -142,13 +142,30 @@ func bootDetached(id string, childArgs []string, supersededPID int, what string,
 	if err != nil {
 		return err
 	}
-	if err := child.Start(); err != nil {
+	wait := child.Wait
+	if watch == nil {
+		err = child.Start()
+	} else {
+		err = watch.launch(func(report *os.File) (*os.Process, error) {
+			child.ExtraFiles = []*os.File{report}
+			child.Env = append(os.Environ(), claimFDEnv+"=3")
+			if err := child.Start(); err != nil {
+				return nil, err
+			}
+			return child.Process, nil
+		})
+		wait = func() error {
+			defer close(watch.exited)
+			return child.Wait()
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 	if announce != nil {
 		announce(logPath)
 	}
-	return awaitBootOrReady(child.Wait, id, supersededPID, logPath, what)
+	return awaitBootOrReady(wait, id, supersededPID, logPath, what)
 }
 
 // Scaffolding under the lifecycle lock keeps the dir and log from landing
@@ -182,7 +199,7 @@ func launchDetached(id *Identity, selector string, childArgs []string, action, w
 	supersededPID := runningPID(id.ID)
 	err := bootDetached(id.ID, childArgs, supersededPID, what, createDir, func(logPath string) {
 		fmt.Printf("%s %q in the background (log: %s) …\n", action, id.Display(), logPath)
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}
@@ -772,6 +789,8 @@ func sidecarsMention(sidecars []SidecarSpec, placeholder string) bool {
 }
 
 func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sidecarSpecs []SidecarSpec, socks instanceSockets) error {
+	sigCh := watchStopSignals()
+	defer signal.Stop(sigCh)
 	defer removeSocketFiles([]string{socks.net, socks.control})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -806,6 +825,9 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	removeSocketFiles(runtimeSocks)
 	defer removeSocketFiles(runtimeSocks)
 
+	if err := stopBeforeBoot(sigCh, inst.Name); err != nil {
+		return err
+	}
 	sidecars, err := startSidecars(sidecarSpecs, socks, dir)
 	if err != nil {
 		return err
@@ -814,6 +836,9 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	// first would pull a share from under a running guest.
 	defer sidecars.stop()
 
+	if err := stopBeforeBoot(sigCh, inst.Name); err != nil {
+		return err
+	}
 	cmd := exec.Command(runScript)
 	cmd.Dir = dir
 	cmd.Stdout = output
@@ -849,9 +874,6 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 		// idle time.
 		startIdleWatch(ctx, m, srv)
 	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	lost := awaitRunnerExit(sigCh, sidecars.exited(), exit, func() { srv.stopOnce.Do(stop) })
 	err = exit.err
@@ -999,6 +1021,26 @@ func (e *runnerExit) within(d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
+	}
+}
+
+// Installed before the daemon starts anything: under Go's default action a
+// SIGTERM ends sprout, and PDEATHSIG then hands QEMU a SIGTERM it quits on
+// without a guest poweroff.
+func watchStopSignals() chan os.Signal {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	return sigCh
+}
+
+// An error, not a clean exit: a detached `up` reads a clean exit before
+// readiness as a handoff to a running daemon.
+func stopBeforeBoot(sigCh <-chan os.Signal, name string) error {
+	select {
+	case sig := <-sigCh:
+		return fmt.Errorf("received %s before instance %q booted; not booting it", sig, name)
+	default:
+		return nil
 	}
 }
 

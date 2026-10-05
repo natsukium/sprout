@@ -18,7 +18,7 @@ func TestStartForegroundNeverCreatesTheInstance(t *testing.T) {
 	const id = "startnostate"
 	cleanupSocketDir(t, id)
 
-	err := startForeground(&Identity{ID: id, Name: "feature"})
+	err := startForeground(&Identity{ID: id, Name: "feature"}, nil)
 	if err == nil {
 		t.Fatal("start of an instance with no state succeeded")
 	}
@@ -51,7 +51,7 @@ func TestStartRejectsMissingBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := startForeground(&Identity{ID: id, Name: "feature"})
+	err := startForeground(&Identity{ID: id, Name: "feature"}, nil)
 	if err == nil {
 		t.Fatal("expected an error when the bundle is missing, got nil")
 	}
@@ -84,7 +84,7 @@ func TestStartForegroundHandsOffToConcurrentBoot(t *testing.T) {
 	holdLockAndServeLater(t, dir, 400*time.Millisecond)
 
 	out := captureStdout(t, func() error {
-		return startForeground(&Identity{ID: id, Name: "webapp"})
+		return startForeground(&Identity{ID: id, Name: "webapp"}, nil)
 	})
 	if !strings.Contains(out, "already running") {
 		t.Errorf("start should have handed off to the concurrent boot, output:\n%s", out)

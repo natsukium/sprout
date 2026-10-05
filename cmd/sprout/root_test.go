@@ -294,22 +294,21 @@ func TestAllAndInstanceAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// Options only a supervisor can satisfy stay out of help: nobody types a nix
-// store path or a launchd socket name at a prompt, so listing them offers only
-// a way to get it wrong. They must still parse — the nix-darwin module passes
-// them — which is what separates hidden from removed.
+// Flags only a supervisor can satisfy stay out of help, yet still parse: the
+// nix-darwin and NixOS modules pass them.
 func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	for _, c := range []struct {
 		cmd  *cobra.Command
 		flag string
 	}{
 		{newUpCmd(), "bundle"},
+		{newRouteServeCmd(), "activated-socket"},
 		{newRouteServeCmd(), "launchd-socket"},
 	} {
 		t.Run(c.cmd.Name()+" --"+c.flag, func(t *testing.T) {
 			f := c.cmd.Flags().Lookup(c.flag)
 			if f == nil {
-				t.Fatalf("--%s is gone; the nix-darwin module passes it", c.flag)
+				t.Fatalf("--%s is gone; the service modules pass it", c.flag)
 			}
 			if !f.Hidden {
 				t.Errorf("--%s appears in help", c.flag)
@@ -318,18 +317,29 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}
 }
 
-// The nix-darwin module composes these command lines in Nix, where nothing
-// type-checks them against the CLI. A flag renamed here and missed there fails
-// at launchd start time, with the error in a log file nobody is watching.
-func TestLaunchdCommandLinesStillParse(t *testing.T) {
-	// Kept verbatim from nix/darwin-module.nix's `command =` strings, with the
-	// store paths and names substituted.
+// A launchd job keeps the old spelling until the next darwin-rebuild.
+func TestLaunchdSocketSpellingStillNamesTheActivatedSocket(t *testing.T) {
+	cmd := newRouteServeCmd()
+	if err := cmd.ParseFlags([]string{"--launchd-socket", "Listeners"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cmd.Flags().Lookup("activated-socket").Value.String(); got != "Listeners" {
+		t.Errorf("--launchd-socket Listeners left --activated-socket as %q", got)
+	}
+}
+
+// The service modules build these command lines in Nix, where nothing
+// type-checks them against the CLI.
+func TestServiceCommandLinesStillParse(t *testing.T) {
+	// Verbatim from nix/darwin-module.nix and nix/nixos-module.nix, store paths
+	// substituted.
 	for _, c := range []struct {
 		argv     []string
 		wantPath string
 	}{
 		{[]string{"up", "--foreground", "--bundle", "/nix/store/x-sprout-vm-runner", "--instance", "runner"}, "sprout up"},
-		{[]string{"route", "serve", "--launchd-socket", "Listeners", "--domain", "sprout.localhost", "--no-wake"}, "sprout route serve"},
+		{[]string{"route", "serve", "--activated-socket", "Listeners", "--domain", "sprout.localhost", "--no-wake"}, "sprout route serve"},
+		{[]string{"stop", "--all"}, "sprout stop"},
 	} {
 		t.Run(strings.Join(c.argv, " "), func(t *testing.T) {
 			root := newRootCmd()

@@ -43,12 +43,12 @@ func newRouteCmd() *cobra.Command {
 // by name. Raw TCP stays on `sprout forward`.
 func newRouteServeCmd() *cobra.Command {
 	var (
-		port          int
-		bind          string
-		domain        string
-		noWake        bool
-		verbose       bool
-		launchdSocket string
+		port            int
+		bind            string
+		domain          string
+		noWake          bool
+		verbose         bool
+		activatedSocket string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -61,7 +61,7 @@ request for a stopped instance starts it; --no-wake turns that off.
 One router serves every instance. Where one already serves this address and
 domain, this reports it and exits rather than starting a second.
 
-To have launchd keep it running and own port 80 without root, see
+To have launchd or systemd keep it running and own port 80 without root, see
 docs/how-to/run-as-daemon.md.`,
 		Args: usageArgs(func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -70,7 +70,7 @@ docs/how-to/run-as-daemon.md.`,
 			return nil
 		}),
 		RunE: func(c *cobra.Command, _ []string) error {
-			return cmdRoute(c.Flags(), port, bind, domain, noWake, verbose, launchdSocket)
+			return cmdRoute(c.Flags(), port, bind, domain, noWake, verbose, activatedSocket)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 80, "host port to bind (URLs need an explicit :port when this isn't 80)")
@@ -78,20 +78,22 @@ docs/how-to/run-as-daemon.md.`,
 	cmd.Flags().StringVar(&domain, "domain", defaultRouteDomain, "hostname suffix to route (<label>.<domain>)")
 	cmd.Flags().BoolVar(&noWake, "no-wake", false, "do not auto-start a stopped instance when a request arrives for it")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log every request's Host, the instance it resolved to, and the guest port")
-	cmd.Flags().StringVar(&launchdSocket, "launchd-socket", "", "serve the socket launchd bound under this Sockets key instead of binding one")
-	// Hidden, not removed: the nix-darwin module passes it, but no one at a
-	// prompt can supply a launchd socket by hand.
-	_ = cmd.Flags().MarkHidden("launchd-socket")
+	cmd.Flags().StringVar(&activatedSocket, "activated-socket", "", "serve the sockets the service manager bound under this name (launchd Sockets key, systemd FileDescriptorName) instead of binding one")
+	// Hidden, not removed: the nix-darwin and NixOS modules pass it.
+	_ = cmd.Flags().MarkHidden("activated-socket")
+	// Existing launchd jobs pass this until the next darwin-rebuild.
+	cmd.Flags().StringVar(&activatedSocket, "launchd-socket", "", "former name of --activated-socket")
+	_ = cmd.Flags().MarkDeprecated("launchd-socket", "use --activated-socket")
 	return cmd
 }
 
-func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbose bool, launchdSocket string) error {
+func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbose bool, activatedSocket string) error {
 	dom, err := cleanDomain(domain)
 	if err != nil {
 		return err
 	}
 
-	lns, where, err := routeListeners(flags, launchdSocket, bind, port, dom)
+	lns, where, err := routeListeners(flags, activatedSocket, bind, port, dom)
 	if err != nil {
 		// One router serves every instance, so a second run of the wrapper
 		// script that starts it is asking for a state that already holds.
@@ -107,23 +109,52 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 	}
 	defer closeAll(lns)
 
-	// launchd owns the address in the activated case, so the port comes from
-	// the socket it bound, not --port.
-	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose, waking: map[string]bool{}}
+	// An activated socket's port comes from the socket, not --port.
+	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose}
 
 	fmt.Printf("routing %s → instances on %s (Ctrl-C to stop)\n", routeURLTemplate(dom, r.port), where)
 
+	// Before the first accept: Go's default SIGTERM action would exit without
+	// settleWakes waiting for a wake already started.
+	sigCh := watchStopSignals()
+	defer signal.Stop(sigCh)
+	beforeRouteServe()
 	for _, ln := range lns {
 		go r.serve(ln)
 	}
 
-	awaitInterrupt(lns, "stopped routing")
+	awaitInterrupt(sigCh, lns, "stopped routing")
+	r.settleWakes(wakeSettleWait)
 	return nil
 }
 
-func awaitInterrupt(lns []net.Listener, stopped string) {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+var beforeRouteServe = func() {}
+
+var wakeSettleWait = 15 * time.Second
+
+// A stop that follows the router (the NixOS shutdown sweep) finds nothing to
+// stop until each wake's daemon has claimed its instance. daemon.lock cannot
+// stand in for that claim: an unresponsive older daemon may still hold it.
+//
+// Closed listeners leave accepted handlers running, so wakes are refused under
+// the same lock that guards the set.
+func (r *router) settleWakes(wait time.Duration) {
+	r.mu.Lock()
+	r.stopping = true
+	watches := make([]*wakeWatch, 0, len(r.wakes))
+	for _, w := range r.wakes {
+		watches = append(watches, w)
+	}
+	r.mu.Unlock()
+	deadline := time.Now().Add(wait)
+	var wg sync.WaitGroup
+	for _, w := range watches {
+		wg.Go(func() { w.settle(deadline) })
+	}
+	wg.Wait()
+}
+
+func awaitInterrupt(sigCh <-chan os.Signal, lns []net.Listener, stopped string) {
 	<-sigCh
 	closeAll(lns)
 	fmt.Println("\n" + stopped)
@@ -137,8 +168,8 @@ func cleanDomain(domain string) (string, error) {
 	return dom, nil
 }
 
-func routeListeners(flags *pflag.FlagSet, launchdSocket, bind string, port int, domain string) ([]net.Listener, string, error) {
-	if launchdSocket == "" {
+func routeListeners(flags *pflag.FlagSet, activatedSocket, bind string, port int, domain string) ([]net.Listener, string, error) {
+	if activatedSocket == "" {
 		lns, err := routeListen(bind, port, domain)
 		if err != nil {
 			return nil, "", err
@@ -149,13 +180,13 @@ func routeListeners(flags *pflag.FlagSet, launchdSocket, bind string, port int, 
 		return lns, fmt.Sprintf("%s:%d", bind, port), nil
 	}
 	if given := flagsGiven(flags, "port", "bind"); len(given) > 0 {
-		return nil, "", fmt.Errorf("--launchd-socket serves a socket launchd already bound, so it takes its address and port from the Sockets entry; drop %s", strings.Join(given, " and "))
+		return nil, "", fmt.Errorf("--activated-socket serves a socket the service manager already bound, so it takes its address and port from there; drop %s", strings.Join(given, " and "))
 	}
-	lns, err := launchdListeners(launchdSocket)
+	lns, err := activatedListeners(activatedSocket)
 	if err != nil {
 		return nil, "", err
 	}
-	return lns, fmt.Sprintf("the launchd socket %q", launchdSocket), nil
+	return lns, fmt.Sprintf("the activated socket %q", activatedSocket), nil
 }
 
 func flagsGiven(flags *pflag.FlagSet, names ...string) []string {
@@ -168,7 +199,8 @@ func flagsGiven(flags *pflag.FlagSet, names ...string) []string {
 	return given
 }
 
-// launchd can hand over a unix socket, which has no port for URLs to carry.
+// A service manager can hand over a unix socket, which has no port for URLs
+// to carry.
 func listenerPort(ln net.Listener, fallback int) int {
 	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
 		return addr.Port
@@ -268,8 +300,9 @@ type router struct {
 	wake    bool
 	verbose bool
 
-	mu     sync.Mutex
-	waking map[string]bool
+	mu       sync.Mutex
+	wakes    map[string]*wakeWatch
+	stopping bool
 }
 
 // One Fprintf, so concurrent connections interleave whole lines.
@@ -386,6 +419,11 @@ func (r *router) writeNotReady(conn net.Conn, head []byte, host, id, note string
 	case readyWaking:
 		r.logRequest(host, head, note+instanceLog(id)+" is still booting (503)")
 		r.writeWaking(conn, displayForID(id))
+	case readyRouterStopping:
+		r.logRequest(host, head, note+instanceLog(id)+" is stopped and the router is shutting down (503)")
+		r.writeError(conn, http.StatusServiceUnavailable,
+			fmt.Sprintf("Instance %q is stopped", displayForID(id)),
+			"The router is shutting down, so it does not start instances. Start it with <code>sprout start</code>.")
 	}
 	// No default: a state this switch does not know closes the connection
 	// with nothing written, where a default would dress it up as an
@@ -525,10 +563,11 @@ func guestStream(ctl net.Conn, guestAddr string, track bool) (net.Conn, error) {
 type readyState int
 
 const (
-	readyOK      readyState = iota // running and answering SSH
-	readyWaking                    // booting, or a wake was just kicked off
-	readyStopped                   // down, and --no-wake forbids starting it
-	readyGone                      // down, and its recorded build is missing (can't start)
+	readyOK             readyState = iota // running and answering SSH
+	readyWaking                           // booting, or a wake was just kicked off
+	readyStopped                          // down, and --no-wake forbids starting it
+	readyGone                             // down, and its recorded build is missing (can't start)
+	readyRouterStopping                   // down, and the router is shutting down, so it starts nothing
 )
 
 // The wake goes through `start`, not `up`: start re-boots a recorded bundle
@@ -554,40 +593,52 @@ func (r *router) ensureReady(id string) (readyState, *controlInfo) {
 			return readyGone, nil
 		}
 	}
-	r.startWake(id)
+	if !r.startWake(id) {
+		return readyRouterStopping, nil
+	}
 	return readyWaking, nil
 }
 
 // At most one wake per instance, so a burst of requests shares one boot. The
 // entry is held for the whole boot: releasing it early would let the next
 // refresh start a second daemon that clobbers the first's control socket.
-func (r *router) startWake(id string) {
+func (r *router) startWake(id string) bool {
 	r.mu.Lock()
-	if r.waking[id] {
+	if r.wakes[id] != nil {
 		r.mu.Unlock()
-		return
+		return true
 	}
-	r.waking[id] = true
+	if r.stopping {
+		r.mu.Unlock()
+		return false
+	}
+	if r.wakes == nil {
+		r.wakes = map[string]*wakeWatch{}
+	}
+	w := newWakeWatch()
+	r.wakes[id] = w
 	r.mu.Unlock()
 
 	go func() {
 		defer func() {
 			r.mu.Lock()
-			delete(r.waking, id)
+			delete(r.wakes, id)
 			r.mu.Unlock()
+			close(w.ended)
 		}()
-		if err := wakeInstance(id); err != nil {
+		if err := wakeInstance(id, w); err != nil {
 			fmt.Fprintf(os.Stderr, "route: waking %s: %v\n", displayForID(id), err)
 		}
 	}()
+	return true
 }
 
 // Blocks until the VM answers, so startWake's entry covers the whole boot.
 // Silent: nothing reads a router's stdout, and the failure a request cares
 // about surfaces on the interstitial instead. A variable so a test can reach
 // the pages a wake leads to without booting a VM.
-var wakeInstance = func(id string) error {
-	return bootDetached(id, startChildArgs(id), 0, "boot", false, nil)
+var wakeInstance = func(id string, w *wakeWatch) error {
+	return bootDetached(id, startChildArgs(id), 0, "boot", false, nil, w)
 }
 
 type routeKind int

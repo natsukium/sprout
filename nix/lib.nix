@@ -39,14 +39,16 @@ let
   # discovery reads.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
-  # What the sprout binary shells out to (git, ssh, and `nix build` for GC
-  # roots): launchd jobs see only this PATH. The vfkit runner carries its own
-  # closure and needs nothing here.
-  hostTools = pkgs: [
-    pkgs.git
-    pkgs.openssh
-    pkgs.nix
-  ];
+  # Service jobs see only this PATH on top of their manager's default, which on
+  # systemd lacks the `ps` the orphan reaper runs.
+  hostTools =
+    pkgs:
+    [
+      pkgs.git
+      pkgs.openssh
+      pkgs.nix
+    ]
+    ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.procps;
 in
 {
   inherit

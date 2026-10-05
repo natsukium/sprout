@@ -31,6 +31,17 @@ func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
 
 var errInstanceNowServing = errors.New("another daemon started serving this instance")
 
+// The probe briefly takes a free lock, so the caller must hold the lifecycle
+// lock that every claim is made under, or a claim could collide with it.
+func daemonLockHeld(dir string) bool {
+	f, err := os.Open(filepath.Join(dir, "daemon.lock"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	return errors.Is(syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB), syscall.EWOULDBLOCK)
+}
+
 func lockInstance(dir string, wait time.Duration, serving func() bool) (*os.File, error) {
 	path := filepath.Join(dir, "daemon.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)

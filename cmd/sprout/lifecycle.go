@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -90,7 +91,11 @@ func stopOne(id string, behavior stopBehavior) error {
 		return err
 	}
 	defer lc.Close()
-	if !instanceRunning(id) {
+	running, err := awaitBootingDaemon(id, dir, name)
+	if err != nil {
+		return err
+	}
+	if !running {
 		// Also the state a SIGKILLed daemon leaves behind, so this is where a
 		// client sweeps the credentials its skipped defer stranded on disk.
 		sweepStaleCredentialsLocked(dir, 0)
@@ -121,6 +126,34 @@ func stopOne(id string, behavior stopBehavior) error {
 		fmt.Printf("instance %q stopped\n", name)
 	}
 	return nil
+}
+
+// Must leave the NixOS sweep unit's TimeoutStopSec room for the guest poweroff
+// that follows.
+var bootingServeWait = 30 * time.Second
+
+// A daemon holds daemon.lock well before it serves control; reading that window
+// as stopped would let the boot finish after the stop reported success.
+// Holding the lifecycle lock here cannot stall it: a daemon takes none after
+// claiming.
+func awaitBootingDaemon(id, dir, name string) (bool, error) {
+	if instanceRunning(id) {
+		return true, nil
+	}
+	if !daemonLockHeld(dir) {
+		return false, nil
+	}
+	fmt.Fprintf(os.Stderr, "instance %q is booting; waiting for it to come up so it can be stopped …\n", name)
+	pollUntil(bootingServeWait, 250*time.Millisecond, func() bool {
+		return instanceRunning(id) || !daemonLockHeld(dir)
+	})
+	if instanceRunning(id) {
+		return true, nil
+	}
+	if !daemonLockHeld(dir) {
+		return false, nil
+	}
+	return false, fmt.Errorf("instance %q: another sprout process has held it for %s without serving it (a boot that is stuck, or a snapshot restore); nothing was stopped", name, bootingServeWait)
 }
 
 // The caller holds the lifecycle lock, so this takes no locks and sweeps no
@@ -418,11 +451,15 @@ func readerEchoesInput(r io.Reader) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+// Concurrent: `stop --all` runs under one service stop timeout at host
+// shutdown, and serial poweroffs would need one timeout each.
 func forEachOf(ids []string, fn func(id string) error) error {
-	var errs []error
-	for _, id := range ids {
-		errs = append(errs, fn(id))
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Go(func() { errs[i] = fn(id) })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

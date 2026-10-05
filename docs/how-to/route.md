@@ -260,13 +260,15 @@ the one port, since a browser may resolve `localhost` to either.
 
 Linux refuses a non-root bind below `net.ipv4.ip_unprivileged_port_start`
 (1024 by default) on every address, `0.0.0.0` included, so there the choices
-are an unprivileged port or lowering that sysctl, which lets every local user
-bind from that port up.
+are an unprivileged port, lowering that sysctl, which lets every local user
+bind from that port up, or on NixOS a systemd socket that binds `:80` for the
+router (`services.sprout.route`, below).
 
 ## Always-on port 80, without root
 
-The nix-darwin module has launchd bind the port as root and hand the socket to
-`sprout route serve` running as you:
+The nix-darwin and NixOS modules have the service manager (launchd or systemd)
+bind the port as root and hand the socket to `sprout route serve` running as
+you:
 
 ```nix
 services.sprout = {
@@ -280,14 +282,34 @@ After `darwin-rebuild switch`, launchd holds the port and starts the router on
 the first request. The router then wakes instances as requests arrive and logs
 to `~/Library/Logs/sprout/route.{out,err}.log`.
 
+After `nixos-rebuild switch`, the `sprout-route.socket` unit holds the port and
+starts `sprout-route.service` on the first connection; the router logs to the
+journal (`journalctl -u sprout-route`). A restart of the router, a rebuild
+included, leaves the socket bound and leaves any instance it woke running.
+A woken instance has no unit of its own and is not restarted if it exits, but
+at host shutdown `sprout-route-instances.service` runs `sprout stop --all` as
+the router's user, after the router has stopped and before the network and the
+nix daemon do, so its guest powers off cleanly. A router told to stop starts
+no further wakes (a request still in flight gets a 503 instead), waits
+(up to 15 seconds) until the daemon each wake forked has claimed its instance,
+terminating one that has not by then (say, one still queued behind an older
+daemon that stopped answering), and the sweep waits for a claimed instance
+that is still booting, so a wake that races the shutdown is stopped too. That sweep also stops anything
+else that user left running; supervised instances have already stopped under
+their own units by then. Declare an instance under `services.sprout.instances`
+when it should come back after a crash or a reboot.
+
 `route.port`, `route.bindAddress`, `route.domain`, and `route.wake` mirror the
 command-line flags; `bindAddress` defaults to `localhost`, which covers both
-loopback families. It needs no `services.sprout.instances`: the router reaches
-instances you started by hand just as well as supervised ones.
+loopback families (on NixOS, `::1` only when `networking.enableIPv6` is on). It
+needs no `services.sprout.instances`: the router reaches instances you started
+by hand just as well as supervised ones.
 
-The `--launchd-socket` flag this relies on takes its address and port from the
-socket launchd bound, so it rejects `--port`/`--bind` and does nothing useful
-outside launchd. Set it through the module rather than by hand.
+The `--activated-socket` flag this relies on adopts the socket the service
+manager bound under that name (a launchd `Sockets` key, a systemd
+`FileDescriptorName`), takes its address and port from it, and so rejects
+`--port`/`--bind` and does nothing useful outside a service manager. Set it
+through the module rather than by hand.
 
 ## Starting the router from a script
 

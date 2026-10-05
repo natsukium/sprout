@@ -196,7 +196,7 @@ func TestRouteEndToEnd(t *testing.T) {
 	backend := startEchoBackend(t)
 	daemon := seedInstance(t, root, "abcd1234ef56", "webapp", backend)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	host := "webapp.sprout.localhost"
@@ -220,7 +220,7 @@ func TestRouteReadinessCheckDoesNotAskForTheResourceSample(t *testing.T) {
 	root := shortStateRoot(t)
 	daemon := seedInstance(t, root, "abcd1234ef56", "webapp", startEchoBackend(t))
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	httpGet(t, addr, "webapp.sprout.localhost")
 
@@ -241,7 +241,7 @@ func TestRouteServesEveryInheritedListener(t *testing.T) {
 	backend := startEchoBackend(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", backend)
 
-	r := &router{domain: "sprout.localhost", port: 80, wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", port: 80, wake: true}
 
 	var addrs []string
 	for range 2 {
@@ -280,7 +280,7 @@ func TestRoutePostBodyReplay(t *testing.T) {
 	go srv.Serve(ln)
 	seedInstance(t, root, "abcd1234ef56", "webapp", ln.Addr().String())
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	conn, err := net.Dial("tcp", addr)
@@ -306,7 +306,7 @@ func TestRouteAmbiguousNameReturns409(t *testing.T) {
 	seedInstance(t, root, "1111aaaa2222", "main", "127.0.0.1:1")
 	seedInstance(t, root, "3333bbbb4444", "main", "127.0.0.1:1")
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	if status := httpStatus(t, addr, "main.sprout.localhost"); status != "409" {
 		t.Errorf("status = %s, want 409", status)
@@ -322,7 +322,7 @@ func TestRouteMultiInstance(t *testing.T) {
 	seedInstance(t, root, "1111aaaa2222", "main", backendMain)
 	seedInstance(t, root, "3333bbbb4444", "feat/login", backendFeat)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	if body := httpGet(t, addr, "main.sprout.localhost"); !strings.Contains(body, "Host=main.sprout.localhost") {
@@ -344,7 +344,7 @@ func TestRouteVirtualHostPrefix(t *testing.T) {
 	seedInstance(t, root, "1111aaaa2222", "main", backendMain)
 	seedInstance(t, root, "3333bbbb4444", "feat/login", backendFeat)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	host := "admin.feat-login.sprout.localhost"
@@ -356,7 +356,7 @@ func TestRouteVirtualHostPrefix(t *testing.T) {
 // A Host outside the route domain is a plain 404, never dialed anywhere.
 func TestRouteForeignHostReturns404(t *testing.T) {
 	shortStateRoot(t)
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	if status := httpStatus(t, addr, "admin.dev.example.localhost"); status != "404" {
 		t.Errorf("status = %s, want 404", status)
@@ -366,7 +366,7 @@ func TestRouteForeignHostReturns404(t *testing.T) {
 // A name with no instance gets a 404, not a hang or a dial error.
 func TestRouteUnknownNameReturns404(t *testing.T) {
 	shortStateRoot(t)
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	if status := httpStatus(t, addr, "ghost.sprout.localhost"); status != "404" {
 		t.Errorf("status = %s, want 404", status)
@@ -380,7 +380,7 @@ func TestRouteGuestDownReturns502(t *testing.T) {
 	dead := deadBackend(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", dead)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	if status := httpStatus(t, addr, "webapp.sprout.localhost"); status != "502" {
 		t.Errorf("status = %s, want 502", status)
@@ -393,7 +393,7 @@ func TestRouteGuestDownHintNamesTheLoopbackTrap(t *testing.T) {
 	root := shortStateRoot(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", deadBackend(t))
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	_, _, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -412,7 +412,7 @@ func TestRouteFreshBootReloadsUntilTheGuestPortListens(t *testing.T) {
 	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
 		&fakeDaemon{backend: deadBackend(t), uptimeSec: 20, sawTrack: make(chan bool, 1)})
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, head, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -438,7 +438,7 @@ func TestRouteLongRunningInstanceStopsWaitingForTheGuestPort(t *testing.T) {
 	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
 		&fakeDaemon{backend: deadBackend(t), uptimeSec: int(routeStartGrace.Seconds()) + 1, sawTrack: make(chan bool, 1)})
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, head, _ := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -461,7 +461,7 @@ func TestRouteRetriesOnceAfterATransientControlFailure(t *testing.T) {
 	d.dropFirstDial.Store(true)
 	seedInstanceWith(t, root, "abcd1234ef56", "webapp", d)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	if body := httpGet(t, addr, "webapp.sprout.localhost"); !strings.Contains(body, "backend saw") {
@@ -477,7 +477,7 @@ func TestRouteGuestDialTimeoutIsNotBlamedOnThePort(t *testing.T) {
 	seedInstanceWith(t, root, "abcd1234ef56", "webapp",
 		&fakeDaemon{dialErrReply: "i/o timeout", sawTrack: make(chan bool, 1)})
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, _, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -499,10 +499,10 @@ func TestRouteDaemonGoneMidRequestWakesInsteadOf502(t *testing.T) {
 
 	woken := make(chan string, 1)
 	restore := wakeInstance
-	wakeInstance = func(id string) error { woken <- id; return nil }
+	wakeInstance = func(id string, _ *wakeWatch) error { woken <- id; return nil }
 	t.Cleanup(func() { wakeInstance = restore })
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, head, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -531,7 +531,7 @@ func TestRouteVerboseLogsWhyTheGuestDialFailed(t *testing.T) {
 	root := shortStateRoot(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", deadBackend(t))
 
-	r := &router{domain: "sprout.localhost", wake: true, verbose: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true, verbose: true}
 	addr := startRouter(t, r)
 
 	logged := captureStderr(t, func() {
@@ -553,7 +553,7 @@ func TestRouteBootingInstanceServesWakingInterstitial(t *testing.T) {
 	d := &fakeDaemon{booting: true, sawTrack: make(chan bool, 1)}
 	seedInstanceWith(t, root, "abcd1234ef56", "webapp", d)
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, head, body := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -576,7 +576,7 @@ func TestRouteBootingInstanceServesWakingInterstitial(t *testing.T) {
 // as a different status.
 func TestRouteRejectsSmugglingShapesWith400(t *testing.T) {
 	shortStateRoot(t)
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	cases := map[string]string{
@@ -609,7 +609,7 @@ func TestRouteMarksItsOwnResponsesButNotTheGuests(t *testing.T) {
 	go srv.Serve(ln)
 	seedInstance(t, root, "abcd1234ef56", "webapp", ln.Addr().String())
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	status, head, _ := sendRaw(t, addr, "GET / HTTP/1.1\r\nHost: ghost.sprout.localhost\r\nConnection: close\r\n\r\n")
@@ -633,7 +633,7 @@ func TestRouteVerboseLogsTheResolvedTarget(t *testing.T) {
 	backend := startEchoBackend(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", backend)
 
-	r := &router{domain: "sprout.localhost", wake: true, verbose: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true, verbose: true}
 	addr := startRouter(t, r)
 
 	logged := captureStderr(t, func() {
@@ -656,7 +656,7 @@ func TestRouteIsQuietWithoutVerbose(t *testing.T) {
 	root := shortStateRoot(t)
 	seedInstance(t, root, "abcd1234ef56", "webapp", startEchoBackend(t))
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 
 	logged := captureStderr(t, func() {

@@ -52,8 +52,9 @@ func routePrivilegedBindError(goos, bindHost string, port int, domain string) er
 	if goos == "linux" {
 		return fmt.Errorf("cannot bind %s:%d: Linux refuses a non-root bind below net.ipv4.ip_unprivileged_port_start. Choose one:\n"+
 			"  • an unprivileged port:  sprout route serve --port 8080     (URLs then carry it: http://<name>.%s:8080/)\n"+
-			"  • %s",
-			bindHost, port, domain, unprivilegedPortStartFix(port))
+			"  • %s\n"+
+			"  • a systemd socket that binds :%d for you (services.sprout.route on NixOS, see docs/how-to/route.md)",
+			bindHost, port, domain, unprivilegedPortStartFix(port), port)
 	}
 	return fmt.Errorf("cannot bind %s:%d: macOS forbids a non-root bind on a privileged port (<1024) against a specific address. Choose one:\n"+
 		"  • an unprivileged port:  sprout route serve --port 8080     (URLs then carry it: http://<name>.%s:8080/)\n"+
@@ -67,7 +68,7 @@ func missingRouterPort80Help(goos string, unprivilegedStart int) string {
 		if unprivilegedStart <= 80 {
 			return ""
 		}
-		return "Linux refuses a non-root bind of :80 here, so that needs either `--port 8080` (and `sprout open --port 8080`) or to " + unprivilegedPortStartFix(80)
+		return "Linux refuses a non-root bind of :80 here, so that needs `--port 8080` (and `sprout open --port 8080`), the systemd socket in docs/how-to/run-as-daemon.md, or to " + unprivilegedPortStartFix(80)
 	}
 	return "macOS refuses a non-root bind of :80, so that needs either `--port 8080` (and `sprout open --port 8080`) or the launchd job in docs/how-to/run-as-daemon.md"
 }

@@ -20,6 +20,9 @@
         darwinModule = flake-parts.lib.importApply ./nix/darwin-module.nix {
           localInputs = inputs;
         };
+        nixosModule = flake-parts.lib.importApply ./nix/nixos-module.nix {
+          localInputs = inputs;
+        };
       in
       {
         systems = [
@@ -36,6 +39,7 @@
           checks = "dev";
           devShells = "dev";
           formatter = "dev";
+          legacyPackages = "dev";
         };
         partitions.dev = {
           extraInputsFlake = ./dev;
@@ -44,6 +48,7 @@
 
         flake.flakeModules.default = flakeModule;
         flake.darwinModules.default = darwinModule;
+        flake.nixosModules.default = nixosModule;
         # Exported as paths so they evaluate against whichever nixpkgs builds
         # the guest.
         flake.nixosModules.k3s = ./nix/modules/nixos/k3s.nix;

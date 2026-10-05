@@ -50,7 +50,7 @@ identity](../explanation/instances.md) for default identity derivation.
 | `sprout status` | Describe one environment (its state, definition, and uptime or disk) and name the command most likely wanted next. Also what a bare `sprout` prints, so an environment you have forgotten the state of is one word away. `--json` prints the same facts as an object. |
 | `sprout list [-q\|--json] [--project]` | List every instance on this host. `-q` prints only IDs, one per line (`stop` takes one instance per invocation, through `-i` only, so compose with `sprout list -q \| xargs -n1 sprout stop -i`, or use `stop --all`); `--json` prints the listing rows as objects with raw metrics; `--project` narrows to the current repository's instances. The full record is `inspect`'s. |
 | `sprout inspect` | Print one instance's full record as JSON: every field of its `instance.json` (bundle, guest IP, PID, …) plus live state, metrics, and `routeLabel`: the hostname label `route` answers to for it, which is the sanitized name, or the ID when more than one instance answers to that label (a shared name, or distinct names sanitizing alike; see [name collisions](../how-to/route.md#when-two-instances-share-a-name)). The single-instance counterpart to `list --json`. |
-| `sprout stop [--hard] [--all\|--project]` | Graceful shutdown; the persistent volume is kept. `--hard` skips the guest shutdown; see [hard stop](#hard-stop). |
+| `sprout stop [--hard] [--all\|--project]` | Graceful shutdown; the persistent volume is kept. `--hard` skips the guest shutdown; see [hard stop](#hard-stop). An instance that is still booting (its daemon has claimed it but does not answer yet) is waited for, up to 30 seconds, and then stopped; one held that long without answering, as by a `snapshot restore`, is reported and left alone. |
 | `sprout delete [--force] [--hard] [--all\|--project]` | Stop the environment and permanently delete its state, including its persistent `/var` volume and any snapshots. Asks first; `--all` covers every instance on the host, `--project` only the current repository's, and either asks once for the whole set. |
 | `sprout prune [--force]` | Delete every orphaned instance: stopped, with its worktree or branch gone (see the states table). A stopped instance you could still return to is left alone. |
 | `sprout snapshot create [--live] SNAP` | Save the instance's `/var` volume under `SNAP`. A copy-on-write clone where the filesystem has them, instant and costing no disk until the two images diverge; a full copy otherwise. Requires the instance stopped unless `--live`. |
@@ -83,7 +83,7 @@ identity](../explanation/instances.md) for default identity derivation.
 | `--verbose` | `route serve` | Log one line per request to stderr: the `Host` received, the request line, and what it resolved to (the instance and guest port it was bridged to, or the status the router answered with itself). |
 | `--domain SUFFIX` | `route serve`, `open` | Hostname suffix to route; default `sprout.localhost`. |
 | `--host-prefix LABELS` | `open` | Hostname labels to place in front of the instance name, for a guest that routes by `Host` itself (`--host-prefix admin.dev` → `http://admin.dev.<name>.sprout.localhost/`). A `GUESTPORT` operand stays leftmost, the only position the router reads it in. |
-| `--launchd-socket NAME` | `route serve` | Serve the socket launchd bound under this `Sockets` key instead of binding one, the only way to loopback `:80` without root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from launchd, so it refuses `--port`/`--bind`. |
+| `--activated-socket NAME` | `route serve` | Serve the sockets the service manager bound under this name instead of binding one: a launchd `Sockets` key on macOS, a systemd `FileDescriptorName` (`LISTEN_FDS`/`LISTEN_FDNAMES`) on Linux. It is the way to loopback `:80` without running the router as root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from the service manager, so it refuses `--port`/`--bind`. `--launchd-socket NAME`, its former name, still works as a deprecated alias so launchd jobs written before the rename keep serving until the next rebuild. |
 | `--force` | `delete`, `prune`, `snapshot restore` | Skip the confirmation prompt. It suppresses only the prompt: the set of things acted on is unchanged. |
 | `--quiet`, `-q` | `list` | Print only instance IDs, one per line, for scripting. |
 | `--print` | `open` | Print the URL instead of opening it, for piping into curl or a script. |
@@ -114,7 +114,10 @@ environments. Either flag is rejected alongside `-i` (and alongside the other)
 rather than resolved one way or the other: a command line naming two scopes,
 or a scope and a target, has no reading that is obviously what was meant.
 
-`stop --all` keeps every persistent volume, so it does not ask. `delete --all`
+`stop --all` keeps every persistent volume, so it does not ask, and it stops
+the selected instances concurrently, so the whole set takes about as long as
+its slowest guest poweroff; that is what lets the NixOS module run it within a
+fixed timeout at host shutdown. `delete --all`
 lists the target set and asks once before destroying it:
 
 ```console
@@ -171,7 +174,7 @@ on and the VM may become ready after `up` has returned. After a timeout, read
 `sprout stop` it if a late boot should not stay running.
 
 `--foreground` runs the daemon in this process instead. That is for a
-supervisor that must own a process living as long as the VM (launchd, in the
+supervisor that must own a process living as long as the VM (launchd or systemd, in the
 [daemon module](../how-to/run-as-daemon.md)), not for watching the boot, which
 `sprout logs -f` does better.
 

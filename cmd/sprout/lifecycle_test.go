@@ -714,3 +714,123 @@ func TestStopHardAbortsOnASwappedIncarnation(t *testing.T) {
 		t.Fatalf("the re-created instance got %v", got)
 	}
 }
+
+func shortBootingServeWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := bootingServeWait
+	bootingServeWait = d
+	t.Cleanup(func() { bootingServeWait = orig })
+}
+
+// A claimed daemon not yet serving control is booting, not stopped.
+func TestStopWaitsForABootingDaemonAndStopsIt(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000040"
+	cleanupSocketDir(t, id)
+	dir := newTestInstance(t, root, id, "booting", "var-data")
+	shortBootingServeWait(t, 10*time.Second)
+	lock, err := acquireInstanceLock(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	sock := daemonControlSocket(t, dir)
+	log := &eventLog{}
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ln.Close()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(conn).ReadString('\n')
+			line = strings.TrimSpace(line)
+			log.add(line)
+			fmt.Fprintln(conn, "OK") //nolint:errcheck
+			conn.Close()
+			if line == "STOP" {
+				os.Remove(sock)
+				lock.Close()
+				return
+			}
+		}
+	}()
+
+	out := captureStdout(t, func() error {
+		return stopOne(id, stopBehavior{quietIfNotRunning: true, reportStopped: true})
+	})
+	if got := log.stopsAndSyncs(); len(got) != 1 || got[0] != "STOP" {
+		t.Fatalf("stop sent %v to the booting daemon, want one STOP", got)
+	}
+	if !strings.Contains(out, `instance "booting" stopped`) {
+		t.Errorf("output %q does not report the instance stopped", out)
+	}
+}
+
+// A claim that never serves (a snapshot restore) ends in an error, not a hang
+// or a reported success.
+func TestStopGivesUpOnAClaimThatNeverServes(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000041"
+	cleanupSocketDir(t, id)
+	dir := newTestInstance(t, root, id, "restoring", "var-data")
+	shortBootingServeWait(t, 500*time.Millisecond)
+	lock, err := acquireInstanceLock(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	err = stopOne(id, stopBehavior{quietIfNotRunning: true})
+	if err == nil || !strings.Contains(err.Error(), "without serving") {
+		t.Fatalf("stop against a claim that never serves: err = %v", err)
+	}
+}
+
+func TestStopOfAStoppedInstanceDoesNotWait(t *testing.T) {
+	root := shortStateRoot(t)
+	const id = "aaaa00000042"
+	cleanupSocketDir(t, id)
+	newTestInstance(t, root, id, "stopped", "var-data")
+	shortBootingServeWait(t, 10*time.Second)
+
+	start := time.Now()
+	if err := stopOne(id, stopBehavior{quietIfNotRunning: true}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("stopping a stopped instance took %s", took)
+	}
+}
+
+// Each call blocks until all have started, so a serial loop never finishes.
+func TestStopAllStopsInstancesConcurrently(t *testing.T) {
+	ids := []string{"a", "b", "c"}
+	var started sync.WaitGroup
+	started.Add(len(ids))
+	done := make(chan error, 1)
+	go func() {
+		done <- forEachOf(ids, func(id string) error {
+			started.Done()
+			started.Wait()
+			if id == "b" {
+				return errors.New("b failed")
+			}
+			return nil
+		})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "b failed") {
+			t.Errorf("err = %v, want b's failure reported", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stops ran one at a time")
+	}
+}

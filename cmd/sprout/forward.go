@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
@@ -117,7 +118,9 @@ func cmdForward(selector, bind string, args []string) error {
 	}
 	fmt.Printf("forwarding %s to %s (Ctrl-C to stop)\n", strings.Join(descs, ", "), target)
 
-	awaitInterrupt(listeners, "stopped forwarding")
+	sigCh := watchStopSignals()
+	defer signal.Stop(sigCh)
+	awaitInterrupt(sigCh, listeners, "stopped forwarding")
 	return nil
 }
 

@@ -87,7 +87,7 @@ sprout up                                          ← returns once the VM is re
 
 `up` re-execs itself with `--foreground` and waits only for readiness, so the
 command you typed returns to the prompt while the daemon it left behind owns
-the VM's lifetime. A supervisor that must own that process (launchd) runs
+the VM's lifetime. A supervisor that must own that process (launchd or systemd) runs
 `--foreground` itself and skips the fork; see [run as a
 daemon](../how-to/run-as-daemon.md).
 
