@@ -40,6 +40,10 @@ func processesMatching(marker string) []string {
 // ignores TERM, wherever the disconnect lands in the guard's startup.
 func TestExecGuardStopsCommandTreeWhenSessionDies(t *testing.T) {
 	requireGuardTools(t)
+	// A disconnect before the login shell reads $PPID leaves it pointing at the
+	// subreaper rather than init, which the guard cannot tell from a live sshd.
+	// The guest has no subreaper; only the afterStart cases hold on such hosts.
+	subreaped := !orphansReparentToInit(t)
 
 	n := 0
 	delays := []time.Duration{-1, 0, time.Millisecond, 5 * time.Millisecond, 20 * time.Millisecond}
@@ -53,6 +57,9 @@ func TestExecGuardStopsCommandTreeWhenSessionDies(t *testing.T) {
 					name = fmt.Sprintf("%s/afterStart/termDeaf=%v", filepath.Base(shell), termDeaf)
 				}
 				t.Run(name, func(t *testing.T) {
+					if subreaped && delay >= 0 {
+						t.Skip("orphans here are adopted by a subreaper, not init as in the guest")
+					}
 					t.Parallel()
 					marker := fmt.Sprintf("4242.%d%03d", time.Now().UnixNano()%1_000_000_000, seq)
 					ready := filepath.Join(t.TempDir(), "ready")

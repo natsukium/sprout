@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -50,7 +51,7 @@ func TestGracefulStopFallsBackToSigterm(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(vfkitREST{}, filepath.Join(dir, "vfkit-rest.sock"), cmd, exit)
+		gracefulStop(vfkitREST{}, fixedSocket(filepath.Join(dir, "vfkit-rest.sock")), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -101,7 +102,7 @@ func TestGracefulStopWalksTheWholeLadder(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(vfkitREST{}, sock, cmd, exit)
+		gracefulStop(vfkitREST{}, fixedSocket(sock), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -164,7 +165,7 @@ func TestHardStopAsksVfkitForHardStop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		hardStop(vfkitREST{}, sock, cmd, exit)
+		hardStop(vfkitREST{}, fixedSocket(sock), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -187,8 +188,41 @@ func TestHardStopFallsBackToSignals(t *testing.T) {
 	sock := serveFakeVfkit(t, func(string) {})
 	cmd, exit := startFakeRunner(t, "trap '' TERM; sleep 300; :")
 
-	hardStop(vfkitREST{}, sock, cmd, exit)
+	hardStop(vfkitREST{}, fixedSocket(sock), cmd, exit)
 	if !exit.within(5 * time.Second) {
 		t.Fatal("runner survived the hard stop's fallback")
+	}
+}
+
+func fixedSocket(sock string) func() (string, error) {
+	return func() (string, error) { return sock, nil }
+}
+
+type recordingControl struct{ calls int }
+
+func (r *recordingControl) requestStop(string, bool) error { r.calls++; return nil }
+
+// A control socket whose link cannot be revalidated is never dialed; the
+// runner is stopped by signal instead.
+func TestStopNeverDialsAnUnvalidatedLink(t *testing.T) {
+	for name, stop := range map[string]func(controlProtocol, func() (string, error), *exec.Cmd, *runnerExit){
+		"graceful": gracefulStop,
+		"hard":     hardStop,
+	} {
+		cmd := exec.Command("sleep", "30")
+		exit, err := startManaged(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctl := &recordingControl{}
+		stop(ctl, func() (string, error) { return "", errors.New("not ours") }, cmd, exit)
+		if ctl.calls != 0 {
+			t.Errorf("%s: dialed the control socket %d times through an unvalidated link", name, ctl.calls)
+		}
+		select {
+		case <-exit.done:
+		default:
+			t.Errorf("%s: runner still running", name)
+		}
 	}
 }
