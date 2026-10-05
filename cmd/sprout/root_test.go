@@ -303,7 +303,6 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}{
 		{newUpCmd(), "bundle"},
 		{newRouteServeCmd(), "activated-socket"},
-		{newRouteServeCmd(), "launchd-socket"},
 	} {
 		t.Run(c.cmd.Name()+" --"+c.flag, func(t *testing.T) {
 			f := c.cmd.Flags().Lookup(c.flag)
@@ -314,17 +313,6 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 				t.Errorf("--%s appears in help", c.flag)
 			}
 		})
-	}
-}
-
-// A launchd job keeps the old spelling until the next darwin-rebuild.
-func TestLaunchdSocketSpellingStillNamesTheActivatedSocket(t *testing.T) {
-	cmd := newRouteServeCmd()
-	if err := cmd.ParseFlags([]string{"--launchd-socket", "Listeners"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := cmd.Flags().Lookup("activated-socket").Value.String(); got != "Listeners" {
-		t.Errorf("--launchd-socket Listeners left --activated-socket as %q", got)
 	}
 }
 
