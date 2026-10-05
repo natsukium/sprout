@@ -118,7 +118,8 @@
               subPackages = [ "cmd/sprout" ];
               ldflags = [
                 "-X main.version=${version}"
-                "-X main.runtimePath=${pkgs.lib.makeBinPath runtimeTools}"
+                "-X main.runtimePathFirst=${pkgs.lib.makeBinPath runtimeTools.preferred}"
+                "-X main.runtimePathLast=${pkgs.lib.makeBinPath runtimeTools.fallback}"
               ]
               # `sprout doctor` probes the host with a virtiofsd before any bundle
               # exists; a bundle carries and boots its own.

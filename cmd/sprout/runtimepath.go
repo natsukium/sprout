@@ -2,28 +2,26 @@ package main
 
 import (
 	"os"
-	"path/filepath"
+	"strings"
 )
 
-// Set by the Nix package to the bin directories of the tools sprout shells out
-// to; empty in a plain `go build`.
-var runtimePath string
+// Set by the Nix package to bin directories of tools sprout shells out to;
+// empty in a plain `go build`. First goes ahead of the user's PATH, Last after
+// it (see runtimeTools in nix/lib.nix for which tool goes where and why).
+var runtimePathFirst, runtimePathLast string
 
-// Prepended, not appended: the tool found first must be the packaged one, not a
-// /usr/bin stub ahead of it in the user's PATH. Children, nix included,
-// inherit the result.
-func prependRuntimePath(extra, current string) string {
-	switch {
-	case extra == "":
-		return current
-	case current == "":
-		return extra
+func withRuntimePath(first, current, last string) string {
+	var parts []string
+	for _, p := range []string{first, current, last} {
+		if p != "" {
+			parts = append(parts, p)
+		}
 	}
-	return extra + string(filepath.ListSeparator) + current
+	return strings.Join(parts, string(os.PathListSeparator))
 }
 
 func init() {
-	if runtimePath != "" {
-		_ = os.Setenv("PATH", prependRuntimePath(runtimePath, os.Getenv("PATH")))
+	if runtimePathFirst != "" || runtimePathLast != "" {
+		_ = os.Setenv("PATH", withRuntimePath(runtimePathFirst, os.Getenv("PATH"), runtimePathLast))
 	}
 }

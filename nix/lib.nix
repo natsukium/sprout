@@ -39,21 +39,25 @@ let
   # discovery reads.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
-  # What sprout itself shells out to, prepended to its PATH by the package: Nix
-  # reads a git+file flake with whatever `git` comes first, which on a Mac
-  # without the Command Line Tools is a stub that only prompts to install them.
-  # systemd's default PATH also lacks the `ps` the orphan reaper runs.
-  runtimeTools =
-    pkgs:
-    [
-      pkgs.git
-      pkgs.openssh
-    ]
-    ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.procps;
+  # What sprout itself shells out to, added to its PATH by the package. git goes
+  # first: Nix reads a git+file flake with whatever `git` comes first, which on a
+  # Mac without the Command Line Tools is a stub that only prompts to install
+  # them. The rest only fill a gap: the user's ssh reads their ~/.ssh/config,
+  # whose Apple-only options (UseKeychain) Nix's OpenSSH rejects, and systemd's
+  # default PATH lacks the `ps` the orphan reaper runs.
+  runtimeTools = pkgs: {
+    preferred = [ pkgs.git ];
+    fallback = [ pkgs.openssh ] ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.procps;
+  };
 
-  # Nix is left to the service PATH rather than the package's: prepending it
-  # would override the version the user installed.
-  hostTools = pkgs: runtimeTools pkgs ++ [ pkgs.nix ];
+  # Nix is left to the service PATH rather than the package's, which would
+  # override the version the user installed.
+  hostTools =
+    pkgs:
+    let
+      t = runtimeTools pkgs;
+    in
+    t.preferred ++ t.fallback ++ [ pkgs.nix ];
 in
 {
   inherit
