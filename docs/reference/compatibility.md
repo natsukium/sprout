@@ -39,7 +39,8 @@ How each row is tested:
 
 ### Not supported
 
-These are out of scope by design, not pending work:
+None of these works today. They are the current limits of what is built and
+tested, not decisions against them:
 
 - **Other hosts**: Intel Macs (`x86_64-darwin`) and any OS other than macOS
   and Linux. `sprout up` and `sprout doctor` refuse there and name the
@@ -87,8 +88,8 @@ deleting an instance or changing a guest definition.
 The flake output that carries the bundles is qualified by host system:
 `sproutConfigurations.<system>.<name>`, with the guest exposed as
 `nixosConfigurations.sprout-<system>-<name>`. A flake written for an earlier
-release, and a bundle built from one, need the steps in [migrate to
-system-qualified outputs](../how-to/migrate-to-system-qualified-outputs.md).
+release, and a bundle built from one, need the changes the
+[changelog](../../CHANGELOG.md) lists for the release that introduced them.
 
 The version alone does not catch every skew: a bundle built from a newer
 flake can name a cache scope or credential strategy the installed binary has

@@ -34,8 +34,7 @@ Errors that name the flake's output shape mean the flake and the binary
 disagree on the platform contract, not that the flake is broken:
 
 - `exposes VMs as sproutConfigurations.<name>` — the flake predates
-  system-qualified outputs; see the sprout docs' migration guide
-  (`docs/how-to/migrate-to-system-qualified-outputs.md`).
+  system-qualified outputs; the sprout changelog says what to change.
 - `defines VMs but not for <system>` — add that system to the flake's
   `systems`.
 

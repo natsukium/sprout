@@ -200,12 +200,12 @@ running HTTP services by instance name; start it with
 vfkit) and `x86_64-linux` and `aarch64-linux` hosts (guests of the same
 architecture under QEMU/KVM); the [compatibility
 reference](docs/reference/compatibility.md#supported-platforms) lists what each
-backend does differently and what is out of scope. Flakes written for 0.1.x
-expose VMs under a different output; [migrate
-them](docs/how-to/migrate-to-system-qualified-outputs.md) when upgrading. It is in the
-0.x.y pre-release line, so the CLI and configuration may change between
-releases. See the [changelog](CHANGELOG.md) for what each release changed, and
-the [compatibility and release policy](docs/reference/compatibility.md).
+backend does differently and what is not supported yet. It is in the 0.x.y
+pre-release line, so the CLI and configuration may change between releases;
+the [changelog](CHANGELOG.md) says what each release changed and what to change
+when upgrading (flakes written for 0.1.x expose VMs under a different output),
+and the [compatibility and release policy](docs/reference/compatibility.md)
+says what is promised.
 
 `sprout` is a development environment, not a sandbox for untrusted code. With
 `workspace = true`, root in the guest can modify the checkout and its Git

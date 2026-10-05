@@ -8,7 +8,7 @@ with Nix carries its own `git`, which it puts ahead of a `/usr/bin` stub, and
 an OpenSSH it uses only when no `ssh` is on `PATH`; a plain `go build` relies
 on both being installed. The guest is a NixOS system of the host's CPU architecture; the
 [compatibility reference](../reference/compatibility.md#supported-platforms)
-has the full mapping and what is out of scope.
+has the full mapping and what is not supported yet.
 
 On **macOS on Apple Silicon**:
 
