@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,15 +34,23 @@ func cmdDoctor(build bool) error {
 		{"flakes", checkFlakes},
 		{"linux builder", checkLinuxBuilder},
 		{"virtualization", checkVirtualization},
-		{"ssh", checkSSH},
 	}
+	checks = append(checks, hostChecks...)
+	checks = append(checks, doctorCheck{"ssh", checkSSH})
 	if build {
 		checks = append(checks, doctorCheck{"linux build", checkLinuxBuild})
 	}
 
 	failed := 0
+	var unchecked []string
 	for _, c := range checks {
 		detail, err := c.run()
+		var inc inconclusiveError
+		if errors.As(err, &inc) {
+			unchecked = append(unchecked, c.name)
+			fmt.Printf("- %-15s %v\n", c.name, err)
+			continue
+		}
 		if err != nil {
 			failed++
 			fmt.Printf("✗ %-15s %v\n", c.name, err)
@@ -54,6 +63,10 @@ func cmdDoctor(build bool) error {
 	}
 	if err := requireBootableHost(); err != nil {
 		fmt.Printf("\nAll checks passed, but %v.\n", err)
+		return nil
+	}
+	if len(unchecked) > 0 {
+		fmt.Printf("\nEvery check that could run passed, but %s could not be checked here; `sprout up` checks it at boot.\n", strings.Join(unchecked, ", "))
 		return nil
 	}
 	fmt.Println("\nAll checks passed. `sprout up` should work in a flake with a sprout.vms definition.")
@@ -200,3 +213,11 @@ func summarize(s string) string {
 	}
 	return s
 }
+
+// A check that could not run on this host or build: neither a pass nor a
+// failure, and it keeps the summary from promising that `up` will work.
+type inconclusiveError struct{ reason string }
+
+func (e inconclusiveError) Error() string { return e.reason }
+
+func inconclusive(reason string) error { return inconclusiveError{reason} }

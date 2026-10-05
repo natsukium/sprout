@@ -96,13 +96,14 @@ func TestSidecarsAreReadyOnceTheirSocketsExistAndStopWithTheVM(t *testing.T) {
 
 func TestSidecarDyingBeforeItsSocketFailsTheBootWithANamespaceHint(t *testing.T) {
 	shortenSidecarWaits(t)
+	fakeSysctls(t, map[string]string{"kernel.unprivileged_userns_clone": "0"})
 	socks := sidecarSockets(t)
 	specs := []SidecarSpec{sidecarStandIn(t, "ok", "serve", socks), sidecarStandIn(t, "broken", "fail", socks)}
 	_, err := startSidecars(specs, socks, t.TempDir())
 	if err == nil {
 		t.Fatal("boot went ahead with a sidecar that exited")
 	}
-	for _, want := range []string{"broken exited before its socket appeared", "Error entering sandbox", userNamespaceHint} {
+	for _, want := range []string{"broken exited before its socket appeared", "Error entering sandbox", "kernel.unprivileged_userns_clone = 0"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q:\n%v", want, err)
 		}

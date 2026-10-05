@@ -428,6 +428,7 @@ in
         ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
           pkgs.git
           pkgs.fish
+          pkgs.virtiofsd
         ];
         shellHook = config.pre-commit.installationScript;
       };

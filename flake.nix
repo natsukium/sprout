@@ -115,7 +115,12 @@
               };
               vendorHash = "sha256-hT/ygceqQPSyGi6ySzJeZ7nuLaqcmOfvhudW+L+Kxvc=";
               subPackages = [ "cmd/sprout" ];
-              ldflags = [ "-X main.version=${version}" ];
+              ldflags = [
+                "-X main.version=${version}"
+              ]
+              # `sprout doctor` probes the host with a virtiofsd before any bundle
+              # exists; a bundle carries and boots its own.
+              ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux "-X main.virtiofsdPath=${pkgs.virtiofsd}/bin/virtiofsd";
               doCheck = false;
               meta = {
                 description = "Disposable, declarative Linux microVMs for macOS development";
