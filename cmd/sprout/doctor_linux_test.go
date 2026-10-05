@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,5 +36,16 @@ func TestCheckKVMReportsPermissionDenial(t *testing.T) {
 		t.Fatal("checkKVM on an inaccessible device was accepted")
 	} else if !strings.Contains(err.Error(), "kvm group") {
 		t.Errorf("permission error %q does not name the kvm group fix", err)
+	}
+}
+
+func TestRootlessSharesCheckIsInconclusiveWithoutAVirtiofsd(t *testing.T) {
+	prev := virtiofsdPath
+	virtiofsdPath = ""
+	t.Cleanup(func() { virtiofsdPath = prev })
+	_, err := checkRootlessShares()
+	var inc inconclusiveError
+	if !errors.As(err, &inc) {
+		t.Fatalf("err = %v, want an inconclusive result", err)
 	}
 }

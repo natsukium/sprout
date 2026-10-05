@@ -39,3 +39,19 @@ func checkKVM(path string) (string, error) {
 	}
 	return fmt.Sprintf("%s is usable (KVM API %d)", path, version), nil
 }
+
+var hostChecks = []doctorCheck{{"rootless shares", checkRootlessShares}}
+
+func checkRootlessShares() (string, error) {
+	if virtiofsdPath == "" {
+		return "", inconclusive("this sprout was built without a virtiofsd to probe with (build it with Nix); `sprout up` still checks the bundle's own virtiofsd at boot")
+	}
+	if err := probeVirtiofsd([]string{virtiofsdPath}); err != nil {
+		return "", err
+	}
+	detail := "virtiofsd's namespace sandbox works (probed " + virtiofsdPath + ")"
+	if v, ok := readSysctl("kernel.apparmor_restrict_unprivileged_userns"); ok && v == "1" {
+		detail += "; AppArmor restricts user namespaces per executable here, so a bundle's own virtiofsd is checked again at boot"
+	}
+	return detail, nil
+}

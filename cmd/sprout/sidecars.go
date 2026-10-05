@@ -94,14 +94,12 @@ func awaitSidecarSocket(path string, exit *runnerExit) error {
 	}
 }
 
-const userNamespaceHint = "hint: the sidecar could not enter its user namespace sandbox; unprivileged user namespaces are disabled on this host (check sysctl kernel.unprivileged_userns_clone, or on Ubuntu kernel.apparmor_restrict_unprivileged_userns)"
-
 func (s *sidecarSet) failure(p *sidecar, what string) error {
 	msg := fmt.Sprintf("%s %s (see %s)", p.name, what, s.logPath)
 	if tail := p.out.tail(); tail != "" {
 		msg += "\n" + tail
-		if strings.Contains(tail, "entering sandbox") {
-			msg += "\n" + userNamespaceHint
+		if strings.Contains(tail, sandboxFailureMarker) {
+			msg += "\n" + explainSandboxFailure()
 		}
 	}
 	return errors.New(msg)
