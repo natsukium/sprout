@@ -39,16 +39,21 @@ let
   # discovery reads.
   mkVMs = { pkgs, vms }: lib.mapAttrs (name: vmCfg: mkVM (vmCfg // { inherit pkgs name; })) vms;
 
-  # Service jobs see only this PATH on top of their manager's default, which on
-  # systemd lacks the `ps` the orphan reaper runs.
-  hostTools =
+  # What sprout itself shells out to, prepended to its PATH by the package: Nix
+  # reads a git+file flake with whatever `git` comes first, which on a Mac
+  # without the Command Line Tools is a stub that only prompts to install them.
+  # systemd's default PATH also lacks the `ps` the orphan reaper runs.
+  runtimeTools =
     pkgs:
     [
       pkgs.git
       pkgs.openssh
-      pkgs.nix
     ]
     ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.procps;
+
+  # Nix is left to the service PATH rather than the package's: prepending it
+  # would override the version the user installed.
+  hostTools = pkgs: runtimeTools pkgs ++ [ pkgs.nix ];
 in
 {
   inherit
@@ -60,6 +65,7 @@ in
     mkVMs
     devShellPackages
     hostTools
+    runtimeTools
     ;
   # Export paths so custom entries evaluate in the consumer's module system.
   cacheEntryModule = ./modules/cache/entry.nix;

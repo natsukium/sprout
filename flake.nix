@@ -95,6 +95,12 @@
               else
                 "unknown";
             version = "${releaseVersion}-${rev}";
+            runtimeTools =
+              (import ./nix/lib.nix {
+                localInputs = inputs;
+                lib = inputs.nixpkgs.lib;
+              }).runtimeTools
+                pkgs;
           in
           {
             packages.sprout = pkgs.buildGoModule {
@@ -112,6 +118,7 @@
               subPackages = [ "cmd/sprout" ];
               ldflags = [
                 "-X main.version=${version}"
+                "-X main.runtimePath=${pkgs.lib.makeBinPath runtimeTools}"
               ]
               # `sprout doctor` probes the host with a virtiofsd before any bundle
               # exists; a bundle carries and boots its own.
