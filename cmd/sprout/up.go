@@ -850,20 +850,24 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 	fmt.Printf("instance %q booting (%s runner pid %d) …\n", inst.Name, kind, cmd.Process.Pid)
 
 	ctl := m.contract.control
+	vmControl := func() (string, error) { return relinkedSocket(socketDirBase(), dir, socks.vmControl) }
 
 	var stopRequested atomic.Bool
-	stop := func() { stopRequested.Store(true); go gracefulStop(ctl, socks.vmControl, cmd, exit) }
+	stop := func() {
+		stopRequested.Store(true)
+		go gracefulStop(ctl, vmControl, cmd, exit)
+	}
 	var hardOnce sync.Once
 	hard := func() {
 		stopRequested.Store(true)
-		hardOnce.Do(func() { go hardStop(ctl, socks.vmControl, cmd, exit) })
+		hardOnce.Do(func() { go hardStop(ctl, vmControl, cmd, exit) })
 	}
 	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), measured: append([]procIdentity{exit.proc}, sidecars.identities()...)}
 	if err := serveControl(ctx, socks.control, srv); err != nil {
 		// The runner is already up; returning without stopping it would strand
 		// a runner holding var.img with no control socket, invisible to every
 		// probe until the next boot's orphan reaper finds it.
-		gracefulStop(ctl, socks.vmControl, cmd, exit)
+		gracefulStop(ctl, vmControl, cmd, exit)
 		<-exit.done
 		return err
 	}
@@ -968,10 +972,10 @@ var (
 	sigtermWait     = 15 * time.Second
 )
 
-// sock must be sun_path-safe (see socketdir.go): the runner bound the same
+// vmControl's path must be sun_path-safe (see socketdir.go): the runner bound the same
 // file relative to the instance directory.
-func gracefulStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {
-	if err := ctl.requestStop(sock, false); err == nil && exit.within(controlStopWait) {
+func gracefulStop(ctl controlProtocol, vmControl func() (string, error), cmd *exec.Cmd, exit *runnerExit) {
+	if requestStopVia(ctl, vmControl, false) && exit.within(controlStopWait) {
 		return
 	}
 	killRunner(cmd, exit)
@@ -982,8 +986,8 @@ func gracefulStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerE
 // exits on its own.
 var hardStopWait = 5 * time.Second
 
-func hardStop(ctl controlProtocol, sock string, cmd *exec.Cmd, exit *runnerExit) {
-	if err := ctl.requestStop(sock, true); err == nil && exit.within(hardStopWait) {
+func hardStop(ctl controlProtocol, vmControl func() (string, error), cmd *exec.Cmd, exit *runnerExit) {
+	if requestStopVia(ctl, vmControl, true) && exit.within(hardStopWait) {
 		return
 	}
 	killRunner(cmd, exit)
@@ -1064,4 +1068,13 @@ func awaitRunnerExit(sigCh <-chan os.Signal, lostSidecar <-chan *sidecar, exit *
 	case <-exit.done:
 	}
 	return nil
+}
+
+func requestStopVia(ctl controlProtocol, vmControl func() (string, error), hard bool) bool {
+	sock, err := vmControl()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot reach the VM's control socket (%v); stopping its runner instead\n", err)
+		return false
+	}
+	return ctl.requestStop(sock, hard) == nil
 }

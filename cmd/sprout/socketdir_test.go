@@ -440,3 +440,43 @@ func TestControlDialNeverFallsBackThroughTheIDLink(t *testing.T) {
 		t.Errorf("a stale socket re-pointed the ID-named link at %q (%v), away from the live %q", got, err, other)
 	}
 }
+
+// The daemon's own stop must still reach the VM's control socket after a /tmp
+// cleaner removed the instance's link.
+func TestDaemonStopDialSurvivesARemovedSocketLink(t *testing.T) {
+	const id = "5a3e1d000036"
+	m := contractFor(t, "x86_64-linux", "qemu", nil)
+	dir := instanceDirUnder(t, shortStateRoot(t), id)
+	socks := daemonSockets(t, dir, m)
+	ln, err := net.Listen("unix", socks.vmControl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	if err := os.Remove(socketLinkIn(socketDirBase(), dir)); err != nil {
+		t.Fatal(err)
+	}
+	sock, err := relinkedSocket(socketDirBase(), dir, socks.vmControl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("stop dial after the link was removed: %v", err)
+	}
+	conn.Close()
+}
+
+// A base that is no longer this user's private directory is refused rather
+// than followed to whatever it now points at.
+func TestRelinkRefusesABaseThatIsNotOurs(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base")
+	if err := os.Symlink(t.TempDir(), base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relinkedSocket(base, t.TempDir(), filepath.Join(base, "x", "sock", "vm-control.sock")); err == nil {
+		t.Fatal("relinked through a base that is a symlink")
+	}
+}

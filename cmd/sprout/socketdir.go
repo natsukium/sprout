@@ -172,3 +172,13 @@ func checkInstanceSocketPaths(instDir string, m *Manifest) error {
 	_, err := resolveInstanceSockets(socketDirIn(socketDirBase(), instDir), m)
 	return err
 }
+
+// The daemon dials through the same link as a client, and a /tmp cleaner may
+// remove it while the instance idles. A link that cannot be revalidated is
+// never dialed: the base may now be someone else's, pointing at another VM.
+func relinkedSocket(base, instDir, sock string) (string, error) {
+	if _, err := ensureSocketDir(base, instDir); err != nil {
+		return "", err
+	}
+	return sock, nil
+}

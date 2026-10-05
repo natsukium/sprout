@@ -224,7 +224,7 @@ func TestGracefulStopOverQMPWalksTheWholeLadder(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		gracefulStop(qmpControl{}, q.sock, cmd, exit)
+		gracefulStop(qmpControl{}, fixedSocket(q.sock), cmd, exit)
 		close(done)
 	}()
 	select {
@@ -260,7 +260,7 @@ func TestHardStopOverQMPEndsWhenQEMUQuits(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		hardStop(qmpControl{}, q.sock, cmd, exit)
+		hardStop(qmpControl{}, fixedSocket(q.sock), cmd, exit)
 		close(done)
 	}()
 	select {
