@@ -194,9 +194,6 @@ let
               writableStoreOverlay = lib.mkIf vmCfg.writableStore "/var/nix-rw-store";
               inherit (backend) shares;
 
-              # fsType stays microvm.nix's ext4 default: the daemon reads the
-              # ext4 superblock to tell a finished format from an interrupted
-              # one (cmd/sprout/orphan.go).
               volumes = [
                 {
                   image = "var.img";
@@ -213,6 +210,21 @@ let
               interfaces = [ ];
             };
           }
+          (
+            { config, ... }:
+            {
+              assertions = [
+                {
+                  # The daemon reads the ext4 superblock to tell a finished
+                  # format from an interrupted one (cmd/sprout/orphan.go); any
+                  # other filesystem would be set aside as unformatted on
+                  # every boot.
+                  assertion = lib.all (v: v.image != "var.img" || v.fsType == "ext4") config.microvm.volumes;
+                  message = "sprout: the /var volume must stay ext4";
+                }
+              ];
+            }
+          )
           backend.module
           (import ./guest/credentials.nix {
             inherit guest dataMount;
