@@ -46,9 +46,9 @@ func FuzzControlLine(f *testing.F) {
 }
 
 // The router asks INFO on every request it routes, so "brief" must skip the
-// sample — two forks on the host — while the bare form keeps it: a CLI
-// predating the argument sends bare INFO and must not lose its CPU/MEM
-// columns against a newer daemon.
+// host process scan while the bare form keeps it: a CLI predating the
+// argument sends bare INFO and must not lose its CPU/MEM columns against a
+// newer daemon.
 func TestInfoSkipsTheSampleOnlyForBrief(t *testing.T) {
 	for _, tc := range []struct {
 		command    string
@@ -60,7 +60,7 @@ func TestInfoSkipsTheSampleOnlyForBrief(t *testing.T) {
 		t.Run(tc.command, func(t *testing.T) {
 			sampled := false
 			restore := sampleProcTree
-			sampleProcTree = func(int) (procStats, error) {
+			sampleProcTree = func([]procIdentity) (procStats, error) {
 				sampled = true
 				return procStats{MemBytes: 4096, CPUPct: 12}, nil
 			}

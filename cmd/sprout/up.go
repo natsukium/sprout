@@ -828,7 +828,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 		stopRequested.Store(true)
 		hardOnce.Do(func() { go hardStop(ctl, socks.vmControl, cmd, exit) })
 	}
-	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), runnerPID: cmd.Process.Pid}
+	srv := &controlServer{vn: vn, inst: inst, started: time.Now(), stop: stop, hardStop: hard, sessions: newSessionTracker(time.Now()), measured: append([]procIdentity{exit.proc}, sidecars.identities()...)}
 	if err := serveControl(ctx, socks.control, srv); err != nil {
 		// The runner is already up; returning without stopping it would strand
 		// a runner holding var.img with no control socket, invisible to every
@@ -976,6 +976,7 @@ func killRunner(cmd *exec.Cmd, exit *runnerExit) {
 type runnerExit struct {
 	done chan struct{}
 	err  error
+	proc procIdentity
 }
 
 func watchRunner(cmd *exec.Cmd) *runnerExit {

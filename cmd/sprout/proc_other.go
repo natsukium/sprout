@@ -10,7 +10,9 @@ func startManaged(cmd *exec.Cmd) (*runnerExit, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return watchRunner(cmd), nil
+	exit := watchRunner(cmd)
+	exit.proc = procIdentity{pid: cmd.Process.Pid}
+	return exit, nil
 }
 
 // Not scanned without /proc; under vfkit a second holder surfaces instead as

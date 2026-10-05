@@ -164,10 +164,10 @@ type controlServer struct {
 	stop     func()
 	hardStop func()
 	sessions *sessionTracker
-	// runnerPID is the vfkit child, whose CPU/memory INFO reports. inst.PID is
-	// the daemon, not the hypervisor, so it cannot stand in here.
-	runnerPID int
-	ready     atomic.Bool
+	// The runner and its sidecars, whose combined CPU/memory INFO reports.
+	// inst.PID is the daemon, not the hypervisor, so it cannot stand in here.
+	measured []procIdentity
+	ready    atomic.Bool
 }
 
 func serveControl(ctx context.Context, sockPath string, srv *controlServer) error {
@@ -205,14 +205,15 @@ func (s *controlServer) handle(ctx context.Context, conn net.Conn) {
 	case "PING":
 		fmt.Fprintln(conn, "OK")
 	case "INFO":
-		// The sample forks `ps` and `footprint` per call, so "brief" skips it
+		// The sample forks `ps` and `footprint` per call on macOS and reads
+		// every /proc/<pid>/stat on Linux, so "brief" skips it
 		// for the callers that never read it. Opt-out rather than opt-in, so
 		// a CLI predating the argument keeps its CPU/MEM columns against this
 		// daemon. A failed sample only omits the metrics, rendering as "-" in
 		// `list`; it must never fail the whole INFO response.
 		var stats procStats
 		if arg != "brief" {
-			stats, _ = sampleProcTree(s.runnerPID)
+			stats, _ = sampleProcTree(s.measured)
 		}
 		info, _ := json.Marshal(controlInfo{
 			Name:       s.inst.Name,

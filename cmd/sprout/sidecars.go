@@ -107,6 +107,17 @@ func (s *sidecarSet) failure(p *sidecar, what string) error {
 	return errors.New(msg)
 }
 
+func (s *sidecarSet) identities() []procIdentity {
+	if s == nil {
+		return nil
+	}
+	ids := make([]procIdentity, len(s.procs))
+	for i, p := range s.procs {
+		ids[i] = p.exit.proc
+	}
+	return ids
+}
+
 // Delivers the first sidecar to exit; nil when there are none.
 func (s *sidecarSet) exited() <-chan *sidecar {
 	if s == nil {
