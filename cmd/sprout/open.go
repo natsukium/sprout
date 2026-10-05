@@ -33,7 +33,7 @@ of the instance name for a guest that routes by hostname itself, so
 --host-prefix admin.dev opens http://admin.dev.<name>.sprout.localhost/. --print
 writes the URL instead of opening it, for piping into curl or a script.
 
-The router has to be running: ` + "`sprout route serve`" + `, or the launchd job in
+The router has to be running: ` + "`sprout route serve`" + `, or the service in
 docs/how-to/run-as-daemon.md. --port must match the port it serves on.`,
 		Args:              usageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: completeNothing,

@@ -75,7 +75,7 @@ let
       # Wake re-execs `sprout start`, so it needs the daemon's host tools.
       path = hostTools;
       command =
-        "${cfg.package}/bin/sprout route serve --launchd-socket ${routeSocketName} --domain ${cfg.route.domain}"
+        "${cfg.package}/bin/sprout route serve --activated-socket ${routeSocketName} --domain ${cfg.route.domain}"
         + lib.optionalString (!cfg.route.wake) " --no-wake";
       serviceConfig = {
         Sockets.${routeSocketName} = {

@@ -25,14 +25,14 @@ func routeFlags(t *testing.T, given []string) *pflag.FlagSet {
 	return flags
 }
 
-// launchd bound the socket before the router started, so --port and --bind
-// cannot be honored. Ignoring them would leave the router answering somewhere
-// other than where the command line says.
-func TestRouteListenersRejectsBindFlagsWithLaunchdSocket(t *testing.T) {
+// The service manager bound the socket before the router started, so --port
+// and --bind cannot be honored. Ignoring them would leave the router answering
+// somewhere other than where the command line says.
+func TestRouteListenersRejectsBindFlagsWithActivatedSocket(t *testing.T) {
 	for _, given := range [][]string{{"--port", "8080"}, {"--bind", "0.0.0.0"}, {"--port", "8080", "--bind", "0.0.0.0"}} {
 		_, _, err := routeListeners(routeFlags(t, given), "Listeners", "127.0.0.1", 80, "sprout.localhost")
 		if err == nil {
-			t.Fatalf("--launchd-socket with %v was accepted", given)
+			t.Fatalf("--activated-socket with %v was accepted", given)
 		}
 		for _, name := range given {
 			if strings.HasPrefix(name, "--") && !strings.Contains(err.Error(), name) {
@@ -43,7 +43,7 @@ func TestRouteListenersRejectsBindFlagsWithLaunchdSocket(t *testing.T) {
 }
 
 // A flag left at its default must not read as a contradiction, or every
-// launchd-started router would refuse to start.
+// socket-activated router would refuse to start.
 func TestFlagsGivenSeesOnlyWhatWasSpelledOut(t *testing.T) {
 	got := flagsGiven(routeFlags(t, []string{"--bind", "127.0.0.1"}), "port", "bind")
 	if len(got) != 1 || got[0] != "--bind" {
@@ -51,8 +51,8 @@ func TestFlagsGivenSeesOnlyWhatWasSpelledOut(t *testing.T) {
 	}
 }
 
-// URLs carry whatever port launchd actually bound, which the router can only
-// learn from the socket it was handed.
+// URLs carry whatever port the service manager actually bound, which the router
+// can only learn from the socket it was handed.
 func TestListenerPortReadsTheBoundSocket(t *testing.T) {
 	tcp, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

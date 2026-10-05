@@ -295,21 +295,21 @@ func TestAllAndInstanceAreMutuallyExclusive(t *testing.T) {
 }
 
 // Options only a supervisor can satisfy stay out of help: nobody types a nix
-// store path or a launchd socket name at a prompt, so listing them offers only
-// a way to get it wrong. They must still parse — the nix-darwin module passes
-// them — which is what separates hidden from removed.
+// store path or a service manager's socket name at a prompt, so listing them
+// offers only a way to get it wrong. They must still parse — the nix-darwin and
+// NixOS modules pass them — which is what separates hidden from removed.
 func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	for _, c := range []struct {
 		cmd  *cobra.Command
 		flag string
 	}{
 		{newUpCmd(), "bundle"},
-		{newRouteServeCmd(), "launchd-socket"},
+		{newRouteServeCmd(), "activated-socket"},
 	} {
 		t.Run(c.cmd.Name()+" --"+c.flag, func(t *testing.T) {
 			f := c.cmd.Flags().Lookup(c.flag)
 			if f == nil {
-				t.Fatalf("--%s is gone; the nix-darwin module passes it", c.flag)
+				t.Fatalf("--%s is gone; the service modules pass it", c.flag)
 			}
 			if !f.Hidden {
 				t.Errorf("--%s appears in help", c.flag)
@@ -318,18 +318,19 @@ func TestSupervisorOnlyFlagsAreHiddenButLive(t *testing.T) {
 	}
 }
 
-// The nix-darwin module composes these command lines in Nix, where nothing
-// type-checks them against the CLI. A flag renamed here and missed there fails
-// at launchd start time, with the error in a log file nobody is watching.
-func TestLaunchdCommandLinesStillParse(t *testing.T) {
-	// Kept verbatim from nix/darwin-module.nix's `command =` strings, with the
-	// store paths and names substituted.
+// The nix-darwin and NixOS modules compose these command lines in Nix, where
+// nothing type-checks them against the CLI. A flag renamed here and missed
+// there fails at service start time, with the error in a log nobody watches.
+func TestServiceCommandLinesStillParse(t *testing.T) {
+	// Kept verbatim from nix/darwin-module.nix's `command =` strings and
+	// nix/nixos-module.nix's ExecStart lines, which share their flags, with
+	// the store paths and names substituted.
 	for _, c := range []struct {
 		argv     []string
 		wantPath string
 	}{
 		{[]string{"up", "--foreground", "--bundle", "/nix/store/x-sprout-vm-runner", "--instance", "runner"}, "sprout up"},
-		{[]string{"route", "serve", "--launchd-socket", "Listeners", "--domain", "sprout.localhost", "--no-wake"}, "sprout route serve"},
+		{[]string{"route", "serve", "--activated-socket", "Listeners", "--domain", "sprout.localhost", "--no-wake"}, "sprout route serve"},
 	} {
 		t.Run(strings.Join(c.argv, " "), func(t *testing.T) {
 			root := newRootCmd()

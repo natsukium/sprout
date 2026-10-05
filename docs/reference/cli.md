@@ -83,7 +83,7 @@ identity](../explanation/instances.md) for default identity derivation.
 | `--verbose` | `route serve` | Log one line per request to stderr: the `Host` received, the request line, and what it resolved to (the instance and guest port it was bridged to, or the status the router answered with itself). |
 | `--domain SUFFIX` | `route serve`, `open` | Hostname suffix to route; default `sprout.localhost`. |
 | `--host-prefix LABELS` | `open` | Hostname labels to place in front of the instance name, for a guest that routes by `Host` itself (`--host-prefix admin.dev` → `http://admin.dev.<name>.sprout.localhost/`). A `GUESTPORT` operand stays leftmost, the only position the router reads it in. |
-| `--launchd-socket NAME` | `route serve` | Serve the socket launchd bound under this `Sockets` key instead of binding one, the only way to loopback `:80` without root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from launchd, so it refuses `--port`/`--bind`. |
+| `--activated-socket NAME` | `route serve` | Serve the sockets the service manager bound under this name instead of binding one: a launchd `Sockets` key on macOS, a systemd `FileDescriptorName` (`LISTEN_FDS`/`LISTEN_FDNAMES`) on Linux. It is the way to loopback `:80` without running the router as root. Set by `services.sprout.route` and hidden from `--help`; it takes its address and port from the service manager, so it refuses `--port`/`--bind`. |
 | `--force` | `delete`, `prune`, `snapshot restore` | Skip the confirmation prompt. It suppresses only the prompt: the set of things acted on is unchanged. |
 | `--quiet`, `-q` | `list` | Print only instance IDs, one per line, for scripting. |
 | `--print` | `open` | Print the URL instead of opening it, for piping into curl or a script. |
@@ -171,7 +171,7 @@ on and the VM may become ready after `up` has returned. After a timeout, read
 `sprout stop` it if a late boot should not stay running.
 
 `--foreground` runs the daemon in this process instead. That is for a
-supervisor that must own a process living as long as the VM (launchd, in the
+supervisor that must own a process living as long as the VM (launchd or systemd, in the
 [daemon module](../how-to/run-as-daemon.md)), not for watching the boot, which
 `sprout logs -f` does better.
 

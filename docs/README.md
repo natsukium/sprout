@@ -31,7 +31,7 @@ Bring host resources into the guest:
 
 Operate beyond the dev loop:
 
-- [Run a supervised instance under launchd](how-to/run-as-daemon.md)
+- [Run a supervised instance under launchd or systemd](how-to/run-as-daemon.md)
 - [Emulate a foreign architecture](how-to/emulate-foreign-architectures.md)
 
 ## Reference

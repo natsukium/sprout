@@ -43,8 +43,8 @@ Starting a development environment should not occupy a terminal, so console
 output is a separate, composable operation: ` + "`sprout logs --follow`" + `.
 
 --foreground instead runs the daemon in this process, which is what a
-supervisor (launchd, via services.sprout) needs: it must own a process that
-lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
+supervisor (launchd or systemd, via services.sprout) needs: it must own a
+process that lives as long as the VM. See docs/how-to/run-as-daemon.md.`,
 		Args: usageArgs(noPositionals),
 	}
 	selector := addInstanceFlag(cmd)

@@ -43,12 +43,12 @@ func newRouteCmd() *cobra.Command {
 // by name. Raw TCP stays on `sprout forward`.
 func newRouteServeCmd() *cobra.Command {
 	var (
-		port          int
-		bind          string
-		domain        string
-		noWake        bool
-		verbose       bool
-		launchdSocket string
+		port            int
+		bind            string
+		domain          string
+		noWake          bool
+		verbose         bool
+		activatedSocket string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -61,7 +61,7 @@ request for a stopped instance starts it; --no-wake turns that off.
 One router serves every instance. Where one already serves this address and
 domain, this reports it and exits rather than starting a second.
 
-To have launchd keep it running and own port 80 without root, see
+To have launchd or systemd keep it running and own port 80 without root, see
 docs/how-to/run-as-daemon.md.`,
 		Args: usageArgs(func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -70,7 +70,7 @@ docs/how-to/run-as-daemon.md.`,
 			return nil
 		}),
 		RunE: func(c *cobra.Command, _ []string) error {
-			return cmdRoute(c.Flags(), port, bind, domain, noWake, verbose, launchdSocket)
+			return cmdRoute(c.Flags(), port, bind, domain, noWake, verbose, activatedSocket)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 80, "host port to bind (URLs need an explicit :port when this isn't 80)")
@@ -78,20 +78,20 @@ docs/how-to/run-as-daemon.md.`,
 	cmd.Flags().StringVar(&domain, "domain", defaultRouteDomain, "hostname suffix to route (<label>.<domain>)")
 	cmd.Flags().BoolVar(&noWake, "no-wake", false, "do not auto-start a stopped instance when a request arrives for it")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log every request's Host, the instance it resolved to, and the guest port")
-	cmd.Flags().StringVar(&launchdSocket, "launchd-socket", "", "serve the socket launchd bound under this Sockets key instead of binding one")
-	// Hidden, not removed: the nix-darwin module passes it, but no one at a
-	// prompt can supply a launchd socket by hand.
-	_ = cmd.Flags().MarkHidden("launchd-socket")
+	cmd.Flags().StringVar(&activatedSocket, "activated-socket", "", "serve the sockets the service manager bound under this name (launchd Sockets key, systemd FileDescriptorName) instead of binding one")
+	// Hidden, not removed: the nix-darwin and NixOS modules pass it, but no one
+	// at a prompt can supply an activated socket by hand.
+	_ = cmd.Flags().MarkHidden("activated-socket")
 	return cmd
 }
 
-func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbose bool, launchdSocket string) error {
+func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbose bool, activatedSocket string) error {
 	dom, err := cleanDomain(domain)
 	if err != nil {
 		return err
 	}
 
-	lns, where, err := routeListeners(flags, launchdSocket, bind, port, dom)
+	lns, where, err := routeListeners(flags, activatedSocket, bind, port, dom)
 	if err != nil {
 		// One router serves every instance, so a second run of the wrapper
 		// script that starts it is asking for a state that already holds.
@@ -107,8 +107,8 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 	}
 	defer closeAll(lns)
 
-	// launchd owns the address in the activated case, so the port comes from
-	// the socket it bound, not --port.
+	// The service manager owns the address in the activated case, so the port
+	// comes from the socket it bound, not --port.
 	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose, waking: map[string]bool{}}
 
 	fmt.Printf("routing %s → instances on %s (Ctrl-C to stop)\n", routeURLTemplate(dom, r.port), where)
@@ -137,8 +137,8 @@ func cleanDomain(domain string) (string, error) {
 	return dom, nil
 }
 
-func routeListeners(flags *pflag.FlagSet, launchdSocket, bind string, port int, domain string) ([]net.Listener, string, error) {
-	if launchdSocket == "" {
+func routeListeners(flags *pflag.FlagSet, activatedSocket, bind string, port int, domain string) ([]net.Listener, string, error) {
+	if activatedSocket == "" {
 		lns, err := routeListen(bind, port, domain)
 		if err != nil {
 			return nil, "", err
@@ -149,13 +149,13 @@ func routeListeners(flags *pflag.FlagSet, launchdSocket, bind string, port int, 
 		return lns, fmt.Sprintf("%s:%d", bind, port), nil
 	}
 	if given := flagsGiven(flags, "port", "bind"); len(given) > 0 {
-		return nil, "", fmt.Errorf("--launchd-socket serves a socket launchd already bound, so it takes its address and port from the Sockets entry; drop %s", strings.Join(given, " and "))
+		return nil, "", fmt.Errorf("--activated-socket serves a socket the service manager already bound, so it takes its address and port from there; drop %s", strings.Join(given, " and "))
 	}
-	lns, err := launchdListeners(launchdSocket)
+	lns, err := activatedListeners(activatedSocket)
 	if err != nil {
 		return nil, "", err
 	}
-	return lns, fmt.Sprintf("the launchd socket %q", launchdSocket), nil
+	return lns, fmt.Sprintf("the activated socket %q", activatedSocket), nil
 }
 
 func flagsGiven(flags *pflag.FlagSet, names ...string) []string {
@@ -168,7 +168,8 @@ func flagsGiven(flags *pflag.FlagSet, names ...string) []string {
 	return given
 }
 
-// launchd can hand over a unix socket, which has no port for URLs to carry.
+// A service manager can hand over a unix socket, which has no port for URLs
+// to carry.
 func listenerPort(ln net.Listener, fallback int) int {
 	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
 		return addr.Port

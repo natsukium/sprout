@@ -28,7 +28,7 @@ import (
 
 // A key can name more than one socket, an entry resolving to both address
 // families yielding one per family, so every descriptor is returned.
-func launchdListeners(name string) ([]net.Listener, error) {
+func activatedListeners(name string) ([]net.Listener, error) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 
@@ -64,7 +64,7 @@ func launchdCheckinError(name string, errno syscall.Errno) error {
 	case syscall.ENOENT:
 		return fmt.Errorf("this launchd job declares no Sockets entry named %q", name)
 	case syscall.ESRCH:
-		return fmt.Errorf("--launchd-socket needs a socket launchd handed over, so it only works under launchd (services.sprout.route); bind one directly with --port/--bind instead")
+		return fmt.Errorf("--activated-socket needs a socket launchd handed over, so it only works under launchd (services.sprout.route); bind one directly with --port/--bind instead")
 	default:
 		return fmt.Errorf("checking in for launchd socket %q: %w", name, errno)
 	}
