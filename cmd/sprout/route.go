@@ -113,7 +113,7 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 
 	// The service manager owns the address in the activated case, so the port
 	// comes from the socket it bound, not --port.
-	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose, waking: map[string]bool{}}
+	r := &router{domain: dom, port: listenerPort(lns[0], port), wake: !noWake, verbose: verbose}
 
 	fmt.Printf("routing %s → instances on %s (Ctrl-C to stop)\n", routeURLTemplate(dom, r.port), where)
 
@@ -138,8 +138,11 @@ var wakeSettleWait = 15 * time.Second
 
 // A wake forks a daemon that claims its instance only after it starts, and a
 // `stop` in between sees nothing to stop. Exiting only once each wake's daemon
-// holds its claim (or the wake has ended) means a stop that follows the router
-// — the NixOS module's shutdown sweep — finds every boot it started.
+// has claimed its instance, or is gone, means a stop that follows the router
+// — the NixOS module's shutdown sweep — finds every boot it started. The
+// instance's lock cannot stand in for the claim: a previous daemon that has
+// stopped answering may still hold it, and this wake's daemon would take it
+// only after the sweep had seen it released.
 //
 // Closing the listeners leaves accepted connections running their handlers,
 // so wakes are refused from here on, under the same lock that guards the set:
@@ -148,33 +151,17 @@ var wakeSettleWait = 15 * time.Second
 func (r *router) settleWakes(wait time.Duration) {
 	r.mu.Lock()
 	r.stopping = true
-	ids := make([]string, 0, len(r.waking))
-	for id := range r.waking {
-		ids = append(ids, id)
+	watches := make([]*wakeWatch, 0, len(r.wakes))
+	for _, w := range r.wakes {
+		watches = append(watches, w)
 	}
 	r.mu.Unlock()
 	deadline := time.Now().Add(wait)
-	for _, id := range ids {
-		pollUntil(time.Until(deadline), 100*time.Millisecond, func() bool {
-			r.mu.Lock()
-			waking := r.waking[id]
-			r.mu.Unlock()
-			return !waking || wakeClaimed(id)
-		})
+	var wg sync.WaitGroup
+	for _, w := range watches {
+		wg.Go(func() { w.settle(deadline) })
 	}
-}
-
-func wakeClaimed(id string) bool {
-	dir, err := instanceDir(id)
-	if err != nil {
-		return true
-	}
-	lc, err := acquireLifecycleLock(id)
-	if err != nil {
-		return true
-	}
-	defer lc.Close()
-	return daemonLockHeld(dir)
+	wg.Wait()
 }
 
 func awaitInterrupt(sigCh <-chan os.Signal, lns []net.Listener, stopped string) {
@@ -324,7 +311,7 @@ type router struct {
 	verbose bool
 
 	mu       sync.Mutex
-	waking   map[string]bool
+	wakes    map[string]*wakeWatch
 	stopping bool
 }
 
@@ -628,7 +615,7 @@ func (r *router) ensureReady(id string) (readyState, *controlInfo) {
 // Reports false only when the router is shutting down and starts nothing.
 func (r *router) startWake(id string) bool {
 	r.mu.Lock()
-	if r.waking[id] {
+	if r.wakes[id] != nil {
 		r.mu.Unlock()
 		return true
 	}
@@ -636,16 +623,21 @@ func (r *router) startWake(id string) bool {
 		r.mu.Unlock()
 		return false
 	}
-	r.waking[id] = true
+	if r.wakes == nil {
+		r.wakes = map[string]*wakeWatch{}
+	}
+	w := newWakeWatch()
+	r.wakes[id] = w
 	r.mu.Unlock()
 
 	go func() {
 		defer func() {
 			r.mu.Lock()
-			delete(r.waking, id)
+			delete(r.wakes, id)
 			r.mu.Unlock()
+			close(w.ended)
 		}()
-		if err := wakeInstance(id); err != nil {
+		if err := wakeInstance(id, w); err != nil {
 			fmt.Fprintf(os.Stderr, "route: waking %s: %v\n", displayForID(id), err)
 		}
 	}()
@@ -656,8 +648,8 @@ func (r *router) startWake(id string) bool {
 // Silent: nothing reads a router's stdout, and the failure a request cares
 // about surfaces on the interstitial instead. A variable so a test can reach
 // the pages a wake leads to without booting a VM.
-var wakeInstance = func(id string) error {
-	return bootDetached(id, startChildArgs(id), 0, "boot", false, nil)
+var wakeInstance = func(id string, w *wakeWatch) error {
+	return bootDetached(id, startChildArgs(id), 0, "boot", false, nil, w)
 }
 
 type routeKind int

@@ -291,9 +291,10 @@ at host shutdown `sprout-route-instances.service` runs `sprout stop --all` as
 the router's user, after the router has stopped and before the network and the
 nix daemon do, so its guest powers off cleanly. A router told to stop starts
 no further wakes (a request still in flight gets a 503 instead), waits
-(briefly) until each wake it already started has claimed its instance, and the
-sweep waits for a claimed instance that is still booting, so a wake that
-races the shutdown is stopped too. That sweep also stops anything
+(up to 15 seconds) until the daemon each wake forked has claimed its instance,
+terminating one that has not by then (say, one still queued behind an older
+daemon that stopped answering), and the sweep waits for a claimed instance
+that is still booting, so a wake that races the shutdown is stopped too. That sweep also stops anything
 else that user left running; supervised instances have already stopped under
 their own units by then. Declare an instance under `services.sprout.instances`
 when it should come back after a crash or a reboot.

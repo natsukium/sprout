@@ -10,31 +10,86 @@ import (
 	"time"
 )
 
-// A wake's daemon claims its instance only after the router forked it, so a
-// router that exited in between would leave a boot no following stop sees.
-func TestRouterExitWaitsForEachWakeToClaimItsInstance(t *testing.T) {
-	root := shortStateRoot(t)
-	const id = "aaaa00000050"
-	dir := newTestInstance(t, root, id, "waking", "var-data")
-	r := &router{waking: map[string]bool{id: true}}
+const wakeTestID = "aaaa00000050"
 
-	claimed := make(chan *os.File, 1)
+// The wake's daemon is the real `start --foreground` path up to its claim; the
+// test instance's bundle does not exist, so it fails right after claiming.
+func runWakeDaemon() {
+	if err := startForeground(&Identity{ID: wakeTestID, Name: "waking"}, takeClaimReport()); err != nil {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// The outgoing daemon holds the lock without serving, which the instance's
+// lock alone cannot tell apart from the wake's own daemon having claimed it.
+func wakeBehindAnOldDaemon(t *testing.T) (r *router, oldLock *os.File) {
+	t.Helper()
+	root := shortStateRoot(t)
+	dir := newTestInstance(t, root, wakeTestID, "waking", "var-data")
+	oldLock, err := acquireInstanceLock(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { oldLock.Close() })
+
+	t.Setenv("SPROUT_TEST_WAKE_CHILD", t.Name())
+	restore := wakeInstance
+	wakeInstance = func(id string, w *wakeWatch) error {
+		return bootDetached(id, []string{"-test.run=^" + t.Name() + "$"}, 0, "boot", false, nil, w)
+	}
+	t.Cleanup(func() { wakeInstance = restore })
+
+	r = &router{}
+	if !r.startWake(wakeTestID) {
+		t.Fatal("wake refused")
+	}
+	if !pollUntil(5*time.Second, 20*time.Millisecond, func() bool { return wakeOf(r).process() != nil }) {
+		t.Fatal("the wake's daemon never started")
+	}
+	return r, oldLock
+}
+
+func wakeOf(r *router) *wakeWatch {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.wakes[wakeTestID]
+}
+
+// A wake's daemon claims its instance only after the router forked it, so a
+// router that exited in between would leave a boot no following stop sees —
+// even while an older daemon still holds the lock it is queued behind.
+func TestRouterExitWaitsForTheWakesOwnDaemonToClaim(t *testing.T) {
+	if os.Getenv("SPROUT_TEST_WAKE_CHILD") == t.Name() {
+		runWakeDaemon()
+	}
+	r, oldLock := wakeBehindAnOldDaemon(t)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		lock, err := acquireInstanceLock(dir, 5*time.Second)
-		if err != nil {
-			t.Error(err)
-		}
-		claimed <- lock
+		time.Sleep(700 * time.Millisecond)
+		oldLock.Close()
 	}()
 	start := time.Now()
 	r.settleWakes(10 * time.Second)
-	took := time.Since(start)
-	if lock := <-claimed; lock != nil {
-		defer lock.Close()
+	if took := time.Since(start); took < 600*time.Millisecond || took > 5*time.Second {
+		t.Errorf("router exit waited %s, want until the wake's daemon claimed after the old one let go about 700ms in", took)
 	}
-	if took < 400*time.Millisecond || took > 5*time.Second {
-		t.Errorf("router exit waited %s, want until the claim about 500ms in", took)
+}
+
+// Past the wait, a daemon still queued behind the old one is ended and reaped:
+// left alone, it would claim the instance and boot after the stop that follows
+// the router had found nothing.
+func TestRouterExitEndsAWakeThatNeverClaimed(t *testing.T) {
+	if os.Getenv("SPROUT_TEST_WAKE_CHILD") == t.Name() {
+		runWakeDaemon()
+	}
+	r, _ := wakeBehindAnOldDaemon(t)
+	w := wakeOf(r)
+
+	r.settleWakes(time.Second)
+	select {
+	case <-w.exited:
+	default:
+		t.Fatal("router exited with the unclaimed wake's daemon still running")
 	}
 }
 
@@ -52,10 +107,10 @@ func TestRouterStartsNoWakeOnceShutdownBegins(t *testing.T) {
 	}
 	woken := make(chan string, 1)
 	restore := wakeInstance
-	wakeInstance = func(id string) error { woken <- id; return nil }
+	wakeInstance = func(id string, _ *wakeWatch) error { woken <- id; return nil }
 	t.Cleanup(func() { wakeInstance = restore })
 
-	r := &router{domain: "sprout.localhost", wake: true, waking: map[string]bool{}}
+	r := &router{domain: "sprout.localhost", wake: true}
 	addr := startRouter(t, r)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -86,12 +141,11 @@ func TestRouterStartsNoWakeOnceShutdownBegins(t *testing.T) {
 func TestRouterExitStopsWaitingForAnEndedWake(t *testing.T) {
 	shortStateRoot(t)
 	const id = "aaaa00000051"
-	r := &router{waking: map[string]bool{id: true}}
+	w := newWakeWatch()
+	r := &router{wakes: map[string]*wakeWatch{id: w}}
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		r.mu.Lock()
-		delete(r.waking, id)
-		r.mu.Unlock()
+		close(w.ended)
 	}()
 	start := time.Now()
 	r.settleWakes(10 * time.Second)

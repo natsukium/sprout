@@ -305,7 +305,7 @@ func TestStartRefusesAPlatformChangeBeforeRewritingTheRecord(t *testing.T) {
 			mustWrite(t, varImagePath(dir), "disk")
 			record := readFileString(t, instanceRecordPath(dir))
 
-			err := startForeground(&Identity{ID: id, Name: "feature"})
+			err := startForeground(&Identity{ID: id, Name: "feature"}, nil)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("start error = %v, want it to mention %q", err, c.wantErr)
 			}
@@ -324,7 +324,7 @@ func TestStartRefusesADiskWithoutAReadableRecord(t *testing.T) {
 	mustWrite(t, instanceRecordPath(dir), "{not json")
 	mustWrite(t, varImagePath(dir), "disk")
 
-	err := startForeground(&Identity{ID: id, Name: "feature"})
+	err := startForeground(&Identity{ID: id, Name: "feature"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "has a disk but no readable record") {
 		t.Fatalf("start error = %v, want the disk-without-record refusal", err)
 	}
@@ -559,7 +559,7 @@ func TestStartRefusesAnOverlongSocketBeforeRewritingTheRecord(t *testing.T) {
 	}
 	record := readFileString(t, instanceRecordPath(dir))
 
-	err := startForeground(&Identity{ID: id, Name: "feature"})
+	err := startForeground(&Identity{ID: id, Name: "feature"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "AF_UNIX") {
 		t.Fatalf("start error = %v, want the socket path-limit refusal", err)
 	}

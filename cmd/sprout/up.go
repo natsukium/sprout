@@ -126,7 +126,7 @@ func upChildArgs(id, selector, def, flakeRef, bundle string) []string {
 
 // The child *is* the daemon, so the reaping awaitBootOrReady does while racing
 // its exit is what keeps a long-lived caller from collecting zombies.
-func bootDetached(id string, childArgs []string, supersededPID int, what string, createDir bool, announce func(logPath string)) error {
+func bootDetached(id string, childArgs []string, supersededPID int, what string, createDir bool, announce func(logPath string), watch *wakeWatch) error {
 	dir, err := instanceDir(id)
 	if err != nil {
 		return err
@@ -142,13 +142,30 @@ func bootDetached(id string, childArgs []string, supersededPID int, what string,
 	if err != nil {
 		return err
 	}
-	if err := child.Start(); err != nil {
+	wait := child.Wait
+	if watch == nil {
+		err = child.Start()
+	} else {
+		err = watch.launch(func(report *os.File) (*os.Process, error) {
+			child.ExtraFiles = []*os.File{report}
+			child.Env = append(os.Environ(), claimFDEnv+"=3")
+			if err := child.Start(); err != nil {
+				return nil, err
+			}
+			return child.Process, nil
+		})
+		wait = func() error {
+			defer close(watch.exited)
+			return child.Wait()
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 	if announce != nil {
 		announce(logPath)
 	}
-	return awaitBootOrReady(child.Wait, id, supersededPID, logPath, what)
+	return awaitBootOrReady(wait, id, supersededPID, logPath, what)
 }
 
 // Scaffolding under the lifecycle lock keeps the dir and log from landing
@@ -182,7 +199,7 @@ func launchDetached(id *Identity, selector string, childArgs []string, action, w
 	supersededPID := runningPID(id.ID)
 	err := bootDetached(id.ID, childArgs, supersededPID, what, createDir, func(logPath string) {
 		fmt.Printf("%s %q in the background (log: %s) …\n", action, id.Display(), logPath)
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}

@@ -22,6 +22,12 @@ func newStartCmd() *cobra.Command {
 	selector := addInstanceFlag(cmd)
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run the daemon in this process instead of returning once the VM is ready (for a supervisor)")
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		// Before requireBootableHost, which runs nix: anything started first
+		// would inherit the report and hold it open.
+		report := takeClaimReport()
+		if report != nil {
+			defer report.Close()
+		}
 		if err := requireBootableHost(); err != nil {
 			return err
 		}
@@ -32,12 +38,12 @@ func newStartCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return startForeground(id)
+		return startForeground(id, report)
 	}
 	return cmd
 }
 
-func startForeground(id *Identity) error {
+func startForeground(id *Identity, report *os.File) error {
 	if instanceRunning(id.ID) {
 		fmt.Printf("instance %q is already running\n", id.Display())
 		return nil
@@ -69,6 +75,7 @@ func startForeground(id *Identity) error {
 	if err != nil {
 		return err
 	}
+	reportClaimed(report)
 	// Swept here rather than left to the boot's cleanup, so a failed start
 	// does not exit with a SIGKILLed daemon's secrets still on disk.
 	if err := os.RemoveAll(credentialsDir(dir)); err != nil {
