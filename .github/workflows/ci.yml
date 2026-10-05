@@ -60,6 +60,30 @@ jobs:
       - run: nix develop -c go vet ./...
       - run: nix develop -c go test -race ./...
 
+  e2e-linux:
+    name: sproutTests (x86_64-linux, QEMU/KVM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c # v35
+      - uses: Mic92/niks3-action@12d3e320b2a99b7938f9634bd337cd9fec104609 # v1.1.0
+        with:
+          server-url: https://niks3.natsukium.com
+      - name: Make /dev/kvm accessible to the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Ubuntu's AppArmor denies unprivileged user namespaces by default, and
+      # virtiofsd's rootless sandbox needs one per share.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: nix run .#sprout -- doctor
+      - run: nix run .#sproutTests.all
+
   guests:
     name: guest closure (${{ matrix.host }}, ${{ matrix.example }}/${{ matrix.vm }})
     runs-on: ${{ matrix.runner }}
