@@ -209,8 +209,6 @@ func awaitDiskReleased(dir string) error {
 	return fmt.Errorf("%s still has %s open after %s; booting now would share the disk with it, so stop it and retry", strings.Join(holders, ", "), img, diskReleaseWait)
 }
 
-// Where ext2/3/4 keep their superblock magic. var.img is always ext4: the
-// bundle's volume leaves microvm.nix's fsType default (see nix/bundle.nix).
 const (
 	ext4MagicOffset = 1080
 	ext4Magic       = 0xef53
@@ -221,9 +219,8 @@ const (
 // leaves an image every later boot accepts and none can mount. mke2fs writes
 // the primary superblock last, so its magic marks a finished format. Moved
 // aside rather than deleted: a real disk whose superblock was damaged also
-// lacks it, and fsck can repair that from a backup copy.
-// Only for an image the bundle declares ext4: any other filesystem, or a
-// bundle too old to say, has no magic to tell a healthy disk apart.
+// lacks it, and fsck can repair that from a backup copy. Any filesystem
+// other than ext4, or a bundle too old to declare one, has no such marker.
 func setAsideUnformattedImage(dir, fsType string) error {
 	if fsType != "ext4" {
 		return nil

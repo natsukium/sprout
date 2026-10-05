@@ -46,9 +46,7 @@ type Manifest struct {
 	} `json:"dns,omitempty"`
 	Credentials []CredentialSpec `json:"credentials"`
 	Caches      []CacheSpec      `json:"caches"`
-	// VarFsType is var.img's filesystem. Only an ext4 image can be told apart
-	// from one whose first-boot format never finished; empty in bundles that
-	// predate the field.
+	// Empty in bundles that predate the field.
 	VarFsType     string `json:"varFsType,omitempty"`
 	Substitutions []struct {
 		Placeholder string `json:"placeholder"`
