@@ -47,7 +47,9 @@ let
 
   # Rootless virtiofsd gets no uid 0 in its namespace, so guest ids are
   # squashed onto the host user's: untranslated, any chown by guest root
-  # into a share fails with EINVAL.
+  # into a share fails with EINVAL. The reverse mapping shows the host
+  # user's files to guest root as its own; otherwise git in the guest
+  # refuses the workspace as owned by someone else.
   sidecars = lib.imap0 (
     i: share:
     let
@@ -63,6 +65,8 @@ let
         "--cache=${s.cache}"
         "--translate-uid=squash-guest:0:${hostId.uid}:4294967295"
         "--translate-gid=squash-guest:0:${hostId.gid}:4294967295"
+        "--translate-uid=host:${hostId.uid}:0:1"
+        "--translate-gid=host:${hostId.gid}:0:1"
       ]
       ++ lib.optional s.readOnly "--readonly"
       ++ s.extraArgs;

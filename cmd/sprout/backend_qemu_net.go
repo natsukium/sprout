@@ -22,10 +22,10 @@ func (qemuStream) serve(ctx context.Context, vn *virtualnetwork.VirtualNetwork, 
 	if err != nil {
 		return fmt.Errorf("qemu network socket listen: %w", err)
 	}
+	keepSocketOnClose(ln)
 	go func() {
 		<-ctx.Done()
 		ln.Close()
-		_ = os.Remove(netSock)
 	}()
 	go serveNICSessions(ctx, "qemu", ln.Accept, vn.AcceptQemu)
 	return nil

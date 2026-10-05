@@ -176,10 +176,10 @@ func serveControl(ctx context.Context, sockPath string, srv *controlServer) erro
 	if err != nil {
 		return err
 	}
+	keepSocketOnClose(ln)
 	go func() {
 		<-ctx.Done()
 		ln.Close()
-		_ = os.Remove(sockPath)
 	}()
 	go func() {
 		for {
@@ -317,4 +317,13 @@ func (c bufferedConn) CloseWrite() error {
 		return hc.CloseWrite()
 	}
 	return nil
+}
+
+// The daemon removes its socket files itself before it releases the
+// instance lock. An unlink from Close, run by a listener goroutine after
+// that, could remove the socket a newer daemon has bound at the same path.
+func keepSocketOnClose(ln net.Listener) {
+	if u, ok := ln.(*net.UnixListener); ok {
+		u.SetUnlinkOnClose(false)
+	}
 }

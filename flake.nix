@@ -12,7 +12,7 @@
   outputs =
     inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } (
-      { withSystem, ... }:
+      { ... }:
       let
         flakeModule = flake-parts.lib.importApply ./nix/flake-module.nix {
           localInputs = inputs;
@@ -61,16 +61,6 @@
             credentialEntryModule
             ;
         };
-
-        flake.sproutTests = withSystem "aarch64-darwin" (
-          { config, pkgs, ... }:
-          import ./nix/tests {
-            localInputs = inputs;
-            lib = inputs.nixpkgs.lib;
-            inherit pkgs;
-            sprout = config.packages.sprout;
-          }
-        );
 
         sprout.vms.dev = {
           vcpu = 2;
@@ -129,6 +119,13 @@
               };
             };
             packages.default = config.packages.sprout;
+
+            legacyPackages.sproutTests = import ./nix/tests {
+              localInputs = inputs;
+              lib = inputs.nixpkgs.lib;
+              inherit pkgs;
+              sprout = config.packages.sprout;
+            };
           };
       }
     );

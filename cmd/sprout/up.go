@@ -768,6 +768,7 @@ func sidecarsMention(sidecars []SidecarSpec, placeholder string) bool {
 }
 
 func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sidecarSpecs []SidecarSpec, socks instanceSockets) error {
+	defer removeSocketFiles([]string{socks.net, socks.control})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
