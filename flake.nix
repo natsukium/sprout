@@ -118,12 +118,16 @@
               subPackages = [ "cmd/sprout" ];
               ldflags = [
                 "-X main.version=${version}"
-                "-X main.runtimePathFirst=${pkgs.lib.makeBinPath runtimeTools.preferred}"
-                "-X main.runtimePathLast=${pkgs.lib.makeBinPath runtimeTools.fallback}"
               ]
               # `sprout doctor` probes the host with a virtiofsd before any bundle
               # exists; a bundle carries and boots its own.
               ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux "-X main.virtiofsdPath=${pkgs.virtiofsd}/bin/virtiofsd";
+              nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+              postInstall = ''
+                wrapProgram $out/bin/sprout \
+                  --prefix PATH : ${pkgs.lib.makeBinPath runtimeTools.preferred} \
+                  --suffix PATH : ${pkgs.lib.makeBinPath runtimeTools.fallback}
+              '';
               doCheck = false;
               meta = {
                 description = "Disposable, declarative Linux microVMs for macOS development";
