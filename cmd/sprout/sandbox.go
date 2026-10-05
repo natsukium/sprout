@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,18 +80,40 @@ func probeVirtiofsd(command []string) error {
 	cmd := exec.Command(command[0], args...)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	if err := cmd.Start(); err != nil {
+	exit, err := startManaged(cmd)
+	if err != nil {
 		return err
 	}
-	exit := watchRunner(cmd)
-	defer func() {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		if !exit.within(sidecarTermWait) {
-			_ = cmd.Process.Kill()
-			<-exit.done
-		}
-	}()
-	if err := awaitSidecarSocket(sock, exit); err != nil {
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			if !exit.within(sidecarTermWait) {
+				_ = cmd.Process.Kill()
+				<-exit.done
+			}
+		})
+	}
+	defer stop()
+
+	// A signal ends the process without running defers, which would leave the
+	// probe's directories behind; the child itself dies with us regardless.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	ready := make(chan error, 1)
+	go func() { ready <- awaitSidecarSocket(sock, exit) }()
+	select {
+	case err = <-ready:
+	case sig := <-sigCh:
+		stop()
+		os.RemoveAll(sockDir)
+		os.RemoveAll(shared)
+		signal.Stop(sigCh)
+		_ = syscall.Kill(os.Getpid(), sig.(syscall.Signal))
+		select {}
+	}
+	if err != nil {
 		msg := fmt.Sprintf("virtiofsd %s", err)
 		if o := strings.TrimSpace(out.String()); o != "" {
 			msg += "\n" + o
