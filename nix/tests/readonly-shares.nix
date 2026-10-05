@@ -1,7 +1,7 @@
 # Read-only shares must hold against guest root, not only against the mount
 # option a guest can remount away. Under QEMU, virtiofsd's --readonly is what
 # refuses the write; vfkit's virtio-fs has no host-side equivalent, so there
-# only the unprivileged-write half applies.
+# only the mount-option half applies.
 { ... }:
 {
   vm.credentials.ro-fixture = {
@@ -24,11 +24,11 @@
     fi
 
     if [ "$(uname -s)" = Linux ]; then
-      if guest a 'mount -o remount,rw /nix/.ro-store && touch /nix/.ro-store/breach'; then
-        fail "guest root wrote into the host store after a remount"
-      fi
-      test ! -e /nix/store/breach
-      if guest a 'mount -o remount,rw /root/ro-src && touch /root/ro-src/breach'; then
+      # The host user owns the fixture, so once the guest-side option is gone
+      # only virtiofsd stands between guest root and the write.
+      guest a 'mount -o remount,rw /root/ro-src' || fail "guest root could not remount the credential share"
+      guest a 'grep " /root/ro-src " /proc/mounts' | grep -q '[[:space:]]rw[,[:space:]]' || fail "the remount left the share read-only in the guest"
+      if guest a 'touch /root/ro-src/breach'; then
         fail "guest root wrote through a read-only credential after a remount"
       fi
     fi

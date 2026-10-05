@@ -23,8 +23,8 @@
   };
 
   testScript = ''
-    forward_port=18431
-    route_port=18432
+    forward_port=$((20000 + RANDOM % 20000))
+    route_port=$((forward_port + 1))
     up a
     dir=$(instance_dir a)
 
