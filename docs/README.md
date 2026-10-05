@@ -34,6 +34,10 @@ Operate beyond the dev loop:
 - [Run a supervised instance under launchd or systemd](how-to/run-as-daemon.md)
 - [Emulate a foreign architecture](how-to/emulate-foreign-architectures.md)
 
+Upgrade:
+
+- [Migrate to system-qualified outputs](how-to/migrate-to-system-qualified-outputs.md)
+
 ## Reference
 
 - [CLI](reference/cli.md)
