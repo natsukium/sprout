@@ -41,6 +41,10 @@ func startManaged(cmd *exec.Cmd) (*runnerExit, error) {
 			started <- err
 			return
 		}
+		// Before Wait: an unreaped child keeps its pid, so the start time read
+		// here cannot belong to a process that reused it.
+		exit.proc = procIdentity{pid: cmd.Process.Pid}
+		exit.proc.start, _ = procStartTime(cmd.Process.Pid)
 		started <- nil
 		exit.err = cmd.Wait()
 		close(exit.done)

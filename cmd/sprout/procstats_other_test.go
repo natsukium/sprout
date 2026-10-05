@@ -1,3 +1,5 @@
+//go:build !linux
+
 package main
 
 import "testing"
@@ -13,7 +15,7 @@ func TestParseProcTreeCollectsSubtreeAndSumsCPU(t *testing.T) {
 		"300   200   4.0\n" +
 		"999     1  10.0\n"
 
-	pids, cpu := parseProcTree(ps, 100)
+	pids, cpu := parseProcTree(ps, []int{100})
 
 	got := map[int]bool{}
 	for _, p := range pids {
@@ -35,9 +37,27 @@ func TestParseProcTreeCollectsSubtreeAndSumsCPU(t *testing.T) {
 // A root with no recorded row, having exited between sampling ps and walking
 // the tree, yields no pids and zero CPU rather than panicking.
 func TestParseProcTreeMissingRoot(t *testing.T) {
-	pids, cpu := parseProcTree("1 0 0.0\n", 4242)
+	pids, cpu := parseProcTree("1 0 0.0\n", []int{4242})
 	if len(pids) != 0 || cpu != 0 {
 		t.Errorf("expected empty result for absent root, got pids=%v cpu=%v", pids, cpu)
+	}
+}
+
+// The runner and its sidecars are separate roots; a process reachable from
+// two of them is still counted once.
+func TestParseProcTreeUnionsRootsCountingEachOnce(t *testing.T) {
+	ps := "" +
+		"100     1   1.0\n" +
+		"200   100   2.0\n" +
+		"300     1   4.0\n"
+
+	pids, cpu := parseProcTree(ps, []int{100, 300, 200})
+
+	if len(pids) != 3 {
+		t.Errorf("expected pids 100, 200 and 300 once each, got %v", pids)
+	}
+	if cpu != 7.0 {
+		t.Errorf("expected summed CPU 7.0 (1.0+2.0+4.0), got %v", cpu)
 	}
 }
 

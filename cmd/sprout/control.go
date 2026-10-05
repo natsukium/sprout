@@ -130,12 +130,13 @@ type controlInfo struct {
 	HardStop bool `json:"hardStop"`
 }
 
-// With MemBytes and CPUPct sampled, at the cost of two forks in the daemon.
+// With MemBytes and CPUPct sampled, at the cost of a host process scan in the
+// daemon.
 func queryInfo(id string) (*controlInfo, error) {
 	return requestInfo(id, "INFO")
 }
 
-// Leaves MemBytes and CPUPct zero and costs the daemon no fork. A daemon
+// Leaves MemBytes and CPUPct zero and spares the daemon that scan. A daemon
 // predating the argument ignores it and samples anyway, so an upgraded CLI
 // needs no fallback against one still running.
 func queryInfoBrief(id string) (*controlInfo, error) {
