@@ -768,6 +768,9 @@ func sidecarsMention(sidecars []SidecarSpec, placeholder string) bool {
 }
 
 func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sidecarSpecs []SidecarSpec, socks instanceSockets) error {
+	// The listeners also remove their files once ctx is cancelled, but from a
+	// goroutine the exiting daemon does not wait for.
+	defer removeSocketFiles([]string{socks.net, socks.control})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
