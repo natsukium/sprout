@@ -33,6 +33,9 @@
     if [ "$(uname -s)" = Linux ]; then
       # shellcheck disable=SC2086
       eventually 30 none_alive $pids || fail "VM processes outlived a killed daemon"
+      if lsof -t -- "$dir/var.img" >/dev/null 2>&1; then
+        fail "var.img is still open after the daemon was killed"
+      fi
     fi
     sprout start --instance a
     guest a true
