@@ -122,7 +122,45 @@ func cmdRoute(flags *pflag.FlagSet, port int, bind, domain string, noWake, verbo
 	}
 
 	awaitInterrupt(lns, "stopped routing")
+	r.settleWakes(wakeSettleWait)
 	return nil
+}
+
+var wakeSettleWait = 15 * time.Second
+
+// A wake forks a daemon that claims its instance only after it starts, and a
+// `stop` in between sees nothing to stop. Exiting only once each wake's daemon
+// holds its claim (or the wake has ended) means a stop that follows the router
+// — the NixOS module's shutdown sweep — finds every boot it started.
+func (r *router) settleWakes(wait time.Duration) {
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.waking))
+	for id := range r.waking {
+		ids = append(ids, id)
+	}
+	r.mu.Unlock()
+	deadline := time.Now().Add(wait)
+	for _, id := range ids {
+		pollUntil(time.Until(deadline), 100*time.Millisecond, func() bool {
+			r.mu.Lock()
+			waking := r.waking[id]
+			r.mu.Unlock()
+			return !waking || wakeClaimed(id)
+		})
+	}
+}
+
+func wakeClaimed(id string) bool {
+	dir, err := instanceDir(id)
+	if err != nil {
+		return true
+	}
+	lc, err := acquireLifecycleLock(id)
+	if err != nil {
+		return true
+	}
+	defer lc.Close()
+	return daemonLockHeld(dir)
 }
 
 func awaitInterrupt(lns []net.Listener, stopped string) {

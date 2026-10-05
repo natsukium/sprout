@@ -91,7 +91,11 @@ func stopOne(id string, behavior stopBehavior) error {
 		return err
 	}
 	defer lc.Close()
-	if !instanceRunning(id) {
+	running, err := awaitBootingDaemon(id, dir, name)
+	if err != nil {
+		return err
+	}
+	if !running {
 		// Also the state a SIGKILLed daemon leaves behind, so this is where a
 		// client sweeps the credentials its skipped defer stranded on disk.
 		sweepStaleCredentialsLocked(dir, 0)
@@ -122,6 +126,36 @@ func stopOne(id string, behavior stopBehavior) error {
 		fmt.Printf("instance %q stopped\n", name)
 	}
 	return nil
+}
+
+// Long enough for a daemon that has claimed its instance to start its sidecars
+// and runner and bind the control socket, short enough to leave a service
+// manager's stop timeout room for the guest poweroff that follows.
+var bootingServeWait = 30 * time.Second
+
+// A daemon claims daemon.lock well before it serves control, and a stop that
+// read that window as "not running" would leave the boot to finish after the
+// stop reported success — at host shutdown, into systemd's final SIGKILL.
+// Waiting needs no daemon cooperation: the daemon takes no lifecycle lock
+// after claiming, so holding ours here cannot stall it.
+func awaitBootingDaemon(id, dir, name string) (bool, error) {
+	if instanceRunning(id) {
+		return true, nil
+	}
+	if !daemonLockHeld(dir) {
+		return false, nil
+	}
+	fmt.Fprintf(os.Stderr, "instance %q is booting; waiting for it to come up so it can be stopped …\n", name)
+	pollUntil(bootingServeWait, 250*time.Millisecond, func() bool {
+		return instanceRunning(id) || !daemonLockHeld(dir)
+	})
+	if instanceRunning(id) {
+		return true, nil
+	}
+	if !daemonLockHeld(dir) {
+		return false, nil
+	}
+	return false, fmt.Errorf("instance %q: another sprout process has held it for %s without serving it (a boot that is stuck, or a snapshot restore); nothing was stopped", name, bootingServeWait)
 }
 
 // The caller holds the lifecycle lock, so this takes no locks and sweeps no
