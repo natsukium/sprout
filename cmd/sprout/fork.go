@@ -160,7 +160,7 @@ func cmdFork(selector string, live bool, newName string) error {
 		return err
 	}
 
-	fmt.Printf("instance %q forked from %q (%s)\n", dst.Display(), src.Display(), copyNote(cow))
+	fmt.Printf("instance %q forked from %q (%s)\n", dst.Display(), src.Display(), copyNote(cow, srcImg))
 	if running {
 		fmt.Println(crashConsistentNote("forked while the source ran"))
 	}

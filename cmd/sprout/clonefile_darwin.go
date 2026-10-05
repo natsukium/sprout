@@ -22,3 +22,5 @@ func cowClone(src, dst string) error {
 		return err
 	}
 }
+
+func markedNoCoW(string) bool { return false }
