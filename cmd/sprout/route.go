@@ -81,9 +81,6 @@ docs/how-to/run-as-daemon.md.`,
 	cmd.Flags().StringVar(&activatedSocket, "activated-socket", "", "serve the sockets the service manager bound under this name (launchd Sockets key, systemd FileDescriptorName) instead of binding one")
 	// Hidden, not removed: the nix-darwin and NixOS modules pass it.
 	_ = cmd.Flags().MarkHidden("activated-socket")
-	// Existing launchd jobs pass this until the next darwin-rebuild.
-	cmd.Flags().StringVar(&activatedSocket, "launchd-socket", "", "former name of --activated-socket")
-	_ = cmd.Flags().MarkDeprecated("launchd-socket", "use --activated-socket")
 	return cmd
 }
 
