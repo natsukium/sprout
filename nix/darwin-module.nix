@@ -55,7 +55,7 @@ let
         KeepAlive = cfg.autoStart && inst.autoStart;
         ThrottleInterval = 30;
         # launchd sends SIGTERM on stop and sprout powers the VM off gracefully
-        # (gracefulStop in up.go); a clean guest poweroff plus vfkit XPC
+        # (gracefulStop in daemon.go); a clean guest poweroff plus vfkit XPC
         # teardown takes longer than the 20s launchd default before SIGKILL.
         ExitTimeOut = 60;
       }
