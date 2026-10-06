@@ -1,0 +1,33 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:best-practices", "schedule:weekly"],
+  // That preset types Go module bumps fix, which cliff.toml would file under
+  // Fixed and count toward a patch release.
+  ignorePresets: [":semanticPrefixFixDepsChoreOthers"],
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+  timezone: "Asia/Tokyo",
+  lockFileMaintenance: {
+    enabled: true,
+  },
+  nix: {
+    enabled: true,
+  },
+  postUpdateOptions: ["gomodTidy"],
+  packageRules: [
+    {
+      matchUpdateTypes: ["minor", "patch", "digest", "pin", "pinDigest", "lockFileMaintenance"],
+      automerge: true,
+    },
+    // go.sum moves the vendor tree, and a nixpkgs bump can move it too through
+    // the Go toolchain that vendors it.
+    {
+      matchManagers: ["gomod", "nix"],
+      postUpgradeTasks: {
+        commands: ["nix-update --flake --version=skip sprout"],
+        fileFilters: ["flake.nix"],
+        executionMode: "branch",
+      },
+    },
+  ],
+}
