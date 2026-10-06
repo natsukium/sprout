@@ -183,6 +183,7 @@ manage them, see [share build caches](../how-to/share-caches.md).
 | `enable` | Opt this cache in (`false` by default, built-ins included). |
 | `guestPath` | Where the cache mounts inside the guest. |
 | `scope` | `"project"` (default) reuses one host tree across every instance of the same clone; `"shared"` widens that to every project on the host; `"instance"` drops the host share and backs the cache with the guest's own `/var`, removed by `sprout delete`. |
+| `owner` | `{ uid; gid; }` in the guest the cache belongs to, for a tool that does not run as root; `null` (default) leaves it to root. A host-backed cache then reads as that owner's throughout, so it is meant for one uid, not several; an instance cache hands over only its top directory, leaving entries already in it with whoever made them. On the vfkit backend (macOS) a host-backed cache ignores it. |
 | `guestEnv` | Environment variables set in the guest, so the tool using the cache is pointed at `guestPath` where the cache is declared (e.g. `SCCACHE_DIR`). |
 | `guestModule` | NixOS module merged into the guest while the cache is enabled: how a built-in ships the tool its cache feeds. Credentials accept the same field. |
 

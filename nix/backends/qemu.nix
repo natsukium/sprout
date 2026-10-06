@@ -4,6 +4,7 @@
   hostPkgs,
   placeholderFor,
   shares,
+  shareOwners,
 }:
 let
   inherit (hostPkgs) lib;
@@ -49,11 +50,18 @@ let
   # squashed onto the host user's: untranslated, any chown by guest root
   # into a share fails with EINVAL. The reverse mapping shows the host
   # user's files to guest root as its own; otherwise git in the guest
-  # refuses the workspace as owned by someone else.
+  # refuses the workspace as owned by someone else. A cache with an owner
+  # maps to that owner instead, since a non-root tool could neither enter a
+  # root-owned 0700 cache nor write into the subdirectories it creates there.
   sidecars = lib.imap0 (
     i: share:
     let
       s = sidecarFieldsOf share;
+      owner =
+        shareOwners.${s.tag} or {
+          uid = 0;
+          gid = 0;
+        };
     in
     {
       name = "virtiofsd-${s.tag}";
@@ -65,8 +73,8 @@ let
         "--cache=${s.cache}"
         "--translate-uid=squash-guest:0:${hostId.uid}:4294967295"
         "--translate-gid=squash-guest:0:${hostId.gid}:4294967295"
-        "--translate-uid=host:${hostId.uid}:0:1"
-        "--translate-gid=host:${hostId.gid}:0:1"
+        "--translate-uid=host:${hostId.uid}:${toString owner.uid}:1"
+        "--translate-gid=host:${hostId.gid}:${toString owner.gid}:1"
       ]
       ++ lib.optional s.readOnly "--readonly"
       ++ s.extraArgs;
