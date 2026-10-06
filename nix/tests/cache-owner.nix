@@ -36,7 +36,13 @@
       guest a "setpriv --reuid=65532 --regid=65532 --clear-groups sh -c '$1'"
     }
 
-    for c in hosted local; do
+    # vfkit does not act on owner for a host share; the host-share checks
+    # here and below are virtiofsd's mapping.
+    caches=local
+    if [ "$(uname -s)" = Linux ]; then
+      caches="hosted local"
+    fi
+    for c in $caches; do
       test "$(guest a "stat -c %u:%g /srv/$c")" = 65532:65532 || fail "/srv/$c is not owned by its declared owner"
       as_owner "mkdir -p /srv/$c/sub && echo one >/srv/$c/sub/entry && echo two >>/srv/$c/sub/entry" ||
         fail "the owner could not write nested entries into /srv/$c"
@@ -46,9 +52,11 @@
 
     # Without an owner a host share keeps showing the host user's tree as
     # root's, which is what guest root needs.
-    test "$(guest a 'stat -c %u /srv/rooted')" = 0 || fail "an ownerless cache is no longer root's"
-    if as_owner 'touch /srv/rooted/breach'; then
-      fail "a non-root uid wrote into an ownerless cache"
+    if [ "$(uname -s)" = Linux ]; then
+      test "$(guest a 'stat -c %u /srv/rooted')" = 0 || fail "an ownerless cache is no longer root's"
+      if as_owner 'touch /srv/rooted/breach'; then
+        fail "a non-root uid wrote into an ownerless cache"
+      fi
     fi
   '';
 }

@@ -38,7 +38,7 @@
         uid = 65532;
         gid = 65532;
       };
-      description = "Guest user and group the cache belongs to, for a tool that does not run as root (a distroless pod's 65532); `null` leaves it to root. Everything in the cache belongs to that owner, so it is meant for one uid, not several; a host-backed cache on vfkit ignores it.";
+      description = "Guest user and group the cache belongs to, for a tool that does not run as root (a distroless pod's 65532); `null` leaves it to root. A host-backed cache reads as that owner's throughout, so it is meant for one uid, not several; an instance cache hands over only its top directory; a host-backed cache on vfkit ignores it.";
     };
     guestEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
