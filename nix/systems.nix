@@ -27,7 +27,7 @@ let
       or (throw "sprout: host system ${hostSystem} is not supported (supported: ${builtins.concatStringsSep ", " hosts})");
 in
 {
-  inherit hosts;
+  inherit table hosts;
   guestFor = hostSystem: (entryFor hostSystem).guest;
 
   # `sprout.vms` is evaluated once for every host, so "auto" can only be
