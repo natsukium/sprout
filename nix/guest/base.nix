@@ -82,7 +82,7 @@ in
 
   # A process ignoring SIGTERM holds poweroff for this long twice, once in its
   # unit's stop and again in systemd-shutdown's final kill, and the host forces
-  # the VM off after restStopWait (30s, cmd/sprout/up.go). At the 90s default,
+  # the VM off after controlStopWait (30s, cmd/sprout/daemon.go). At the 90s default,
   # one such process turns every stop into a power cut.
   systemd.settings.Manager.DefaultTimeoutStopSec = lib.mkDefault "10s";
 
