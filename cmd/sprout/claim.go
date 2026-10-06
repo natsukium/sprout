@@ -6,6 +6,7 @@ package main
 // Lock order is lifecycle → boot, never reversed.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,58 @@ func acquireLifecyclePair(a, b string) (lockA, lockB *os.File, err error) {
 		return lockFirst, lockSecond, nil
 	}
 	return lockSecond, lockFirst, nil
+}
+
+// Covers an in-place reboot where the outgoing daemon is still unwinding.
+// Short on purpose: past it, a held lock means a real concurrent owner.
+const instanceLockWait = 15 * time.Second
+
+// Held for as long as the daemon runs. The kernel drops a flock on process
+// death however abrupt, so holding it proves no other daemon is alive here,
+// and therefore that a matching runner belongs to a dead one.
+func acquireInstanceLock(dir string, wait time.Duration) (*os.File, error) {
+	return lockInstance(dir, wait, nil)
+}
+
+var errInstanceNowServing = errors.New("another daemon started serving this instance")
+
+// The probe briefly takes a free lock, so the caller must hold the lifecycle
+// lock that every claim is made under, or a claim could collide with it.
+func daemonLockHeld(dir string) bool {
+	f, err := os.Open(filepath.Join(dir, "daemon.lock"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	return errors.Is(syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB), syscall.EWOULDBLOCK)
+}
+
+func lockInstance(dir string, wait time.Duration, serving func() bool) (*os.File, error) {
+	path := filepath.Join(dir, "daemon.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			f.Close()
+			return nil, fmt.Errorf("locking %s: %w", path, err)
+		}
+		if serving != nil && serving() {
+			f.Close()
+			return nil, errInstanceNowServing
+		}
+		if !time.Now().Before(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("another sprout process is already booting or running this instance (lock held on %s)", path)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // The caller must hold the lifecycle lock: it keeps the pathname from being
