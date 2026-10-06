@@ -67,6 +67,9 @@ jobs:
       - run: nix flake check --print-build-logs
       - run: nix develop -c go vet ./...
       - run: nix develop -c go test -race ./...
+      # The macOS job cannot build the aarch64-linux guest a vfkit bundle
+      # needs, so the contract test runs against the QEMU runner only.
+      - run: nix develop -c go test -tags integration -run TestManifestRunnerContract ./cmd/sprout
 
   e2e-linux:
     name: sproutTests (x86_64-linux, QEMU/KVM)
