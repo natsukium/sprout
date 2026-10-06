@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 change between releases (see
 [compatibility and release policy](docs/reference/compatibility.md)).
 
+## [0.2.1](https://github.com/natsukium/sprout/compare/v0.2.0...v0.2.1) - 2026-10-06
+
+A cache can now belong to a non-root guest user, such as a distroless pod's
+65532: set `caches.<name>.owner = { uid = 65532; gid = 65532; }`. Without it a
+host-backed cache on a Linux host reads as root's 0700 in the guest, so such a
+process cannot enter it. macOS hosts never had that problem. See [share build
+caches](docs/how-to/share-caches.md#use-a-cache-from-a-non-root-process).
+
+### Added
+
+- Let a non-root guest process own a cache ([#52](https://github.com/natsukium/sprout/pull/52))
+
+### Changed
+
+- Split up.go into up, detach, daemon, and runner files ([#50](https://github.com/natsukium/sprout/pull/50))
+- Keep the per-instance daemon lock beside the lifecycle lock ([#51](https://github.com/natsukium/sprout/pull/51))
+
 ## [0.2.0](https://github.com/natsukium/sprout/compare/0.1.3...v0.2.0) - 2026-10-06
 
 sprout now runs on Linux. `x86_64-linux` and `aarch64-linux` hosts boot a
