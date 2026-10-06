@@ -18,6 +18,28 @@
       default = "project";
       description = "`project` reuses one host tree across every instance of the same clone; `shared` widens that to every project on the host; `instance` drops the host share and backs the cache with the guest's own /var, removed by `sprout delete`.";
     };
+    owner = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            uid = lib.mkOption {
+              type = lib.types.ints.unsigned;
+              description = "Guest uid the cache belongs to.";
+            };
+            gid = lib.mkOption {
+              type = lib.types.ints.unsigned;
+              description = "Guest gid the cache belongs to.";
+            };
+          };
+        }
+      );
+      default = null;
+      example = {
+        uid = 65532;
+        gid = 65532;
+      };
+      description = "Guest user and group the cache belongs to, for a tool that does not run as root (a distroless pod's 65532); `null` leaves it to root. Everything in the cache belongs to that owner, so it is meant for one uid, not several; a host-backed cache on vfkit ignores it.";
+    };
     guestEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };

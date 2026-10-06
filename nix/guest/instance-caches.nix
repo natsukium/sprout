@@ -35,6 +35,9 @@
         "${pkgs.writeShellScript "sprout-instance-cache-${cname}" ''
           set -euo pipefail
           mkdir -p /var/sprout-cache/${cname} ${c.guestPath}
+          chown ${
+            if c.owner == null then "0:0" else "${toString c.owner.uid}:${toString c.owner.gid}"
+          } /var/sprout-cache/${cname}
           # Idempotent: the unit re-runs on a `systemctl restart` and after a
           # switch, where the bind is already in place.
           mountpoint -q ${c.guestPath} || mount --bind /var/sprout-cache/${cname} ${c.guestPath}

@@ -75,6 +75,24 @@ sprout.vms.dev.caches.bazel-disk = {
 };
 ```
 
+## Use a cache from a non-root process
+
+A cache belongs to guest root by default, so a tool running as another uid,
+such as a distroless pod's `65532`, cannot enter it. `owner` hands the cache
+to that uid instead:
+
+```nix
+sprout.vms.dev.caches.bazel-disk = {
+  enable = true;
+  guestPath = "/srv/bazel-disk";
+  owner = { uid = 65532; gid = 65532; };
+};
+```
+
+Keep `guestPath` somewhere that uid can reach: the built-ins default to
+paths under `/root`, which a non-root process cannot traverse, so override
+their `guestPath` or mount the cache into the pod at a path of its own.
+
 ## Ship a reusable cache module
 
 A one-off entry belongs inline as above. Once the same cache (defaults,

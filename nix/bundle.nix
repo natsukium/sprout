@@ -70,6 +70,11 @@ let
           placeholderFor
           ;
         shares = baseShares;
+        # Keyed by tag beside the shares rather than on them: the shares
+        # become microvm.shares, whose submodule rejects unknown fields.
+        shareOwners = lib.mapAttrs' (n: c: lib.nameValuePair "cache-${n}" c.owner) (
+          lib.filterAttrs (_: c: c.owner != null) hostCaches
+        );
       };
       mem = parseSize vmCfg.mem;
       # Which fields a credential needs depends on its strategy, so entry.nix
