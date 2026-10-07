@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -277,5 +279,143 @@ func TestForwardTargetGoneNamesTheInstanceAndTheRecovery(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("message %q does not mention %q", got, want)
 		}
+	}
+}
+
+func TestWorktreeResolverFollowsABranchSwitch(t *testing.T) {
+	repo := initTestRepo(t, "main")
+	resolve := worktreeResolver(repo)
+	before, err := resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Name != "main" {
+		t.Fatalf("resolved %q before the switch, want main", before.Name)
+	}
+
+	runGit(t, repo, "switch", "-q", "-c", "feature")
+	after, err := resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Name != "feature" || after.ID == before.ID {
+		t.Fatalf("resolved %q (%s) after switching to feature, still %q (%s) before", after.Name, after.ID, before.Name, before.ID)
+	}
+}
+
+func TestWorktreeResolverFollowsABranchSwitchInALinkedWorktree(t *testing.T) {
+	repo := initTestRepo(t, "main")
+	wt := filepath.Join(t.TempDir(), "wt")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "topic", wt)
+	resolve := worktreeResolver(wt)
+	if id, err := resolve(); err != nil || id.Name != "topic" {
+		t.Fatalf("resolved %v, %v before the switch, want topic", id, err)
+	}
+
+	runGit(t, wt, "switch", "-q", "-c", "topic2")
+	if id, err := resolve(); err != nil || id.Name != "topic2" {
+		t.Fatalf("resolved %v, %v after switching to topic2, want topic2", id, err)
+	}
+}
+
+func TestWorktreeResolverOutsideGitFollowsALaterInit(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := worktreeResolver(dir)
+	if id, err := resolve(); err != nil || id.KeySource == "branch" {
+		t.Fatalf("resolved %v, %v outside git, want the directory identity", id, err)
+	}
+
+	runGit(t, dir, "init", "-q", "-b", "main", ".")
+	runGit(t, dir, "commit", "-q", "--allow-empty", "-m", "initial")
+	if id, err := resolve(); err != nil || id.Name != "main" {
+		t.Fatalf("resolved %v, %v after git init, want main's identity", id, err)
+	}
+}
+
+func writeHead(t *testing.T, path, branch string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("ref: refs/heads/"+branch+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHeadTrackingResolverResolvesOnlyWhenHeadChanges(t *testing.T) {
+	head := filepath.Join(t.TempDir(), "HEAD")
+	writeHead(t, head, "main")
+	branch, calls := "main", 0
+	resolve := headTrackingResolver(head, func() (*Identity, error) {
+		calls++
+		return &Identity{Name: branch, KeySource: "branch"}, nil
+	})
+
+	for range 3 {
+		if _, err := resolve(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("resolved %d times over three connections with HEAD unchanged, want 1", calls)
+	}
+
+	branch = "feature"
+	writeHead(t, head, branch)
+	if id, _ := resolve(); id.Name != "feature" {
+		t.Fatalf("got identity %q after HEAD changed, want feature's", id.Name)
+	}
+}
+
+func TestHeadTrackingResolverDoesNotCacheWithoutAReadableHead(t *testing.T) {
+	calls := 0
+	resolve := headTrackingResolver(filepath.Join(t.TempDir(), "missing"), func() (*Identity, error) {
+		calls++
+		return &Identity{}, nil
+	})
+	resolve()
+	resolve()
+	if calls != 2 {
+		t.Fatalf("resolved %d times with HEAD unreadable, want every connection to resolve", calls)
+	}
+}
+
+func TestHeadTrackingResolverRetriesAfterAFailedResolution(t *testing.T) {
+	head := filepath.Join(t.TempDir(), "HEAD")
+	writeHead(t, head, "main")
+	fail := true
+	resolve := headTrackingResolver(head, func() (*Identity, error) {
+		if fail {
+			return nil, fmt.Errorf("transient")
+		}
+		return &Identity{Name: "main", KeySource: "branch"}, nil
+	})
+	if _, err := resolve(); err == nil {
+		t.Fatal("expected the first resolution to fail")
+	}
+	fail = false
+	if id, err := resolve(); err != nil || id.Name != "main" {
+		t.Fatalf("got %v, %v after the failure cleared, want a fresh resolution", id, err)
+	}
+}
+
+// git observes feature while HEAD reads main both before and after it runs.
+func TestHeadTrackingResolverDoesNotCacheAnIdentityFromAnotherBranch(t *testing.T) {
+	head := filepath.Join(t.TempDir(), "HEAD")
+	writeHead(t, head, "main")
+	switchedDuringResolution := false
+	resolve := headTrackingResolver(head, func() (*Identity, error) {
+		if !switchedDuringResolution {
+			switchedDuringResolution = true
+			return &Identity{Name: "feature", KeySource: "branch"}, nil
+		}
+		return &Identity{Name: "main", KeySource: "branch"}, nil
+	})
+	if _, err := resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	if id, err := resolve(); err != nil || id.Name != "main" {
+		t.Fatalf("got %v, %v on the next connection, want main's identity rather than one cached under main's HEAD", id, err)
 	}
 }

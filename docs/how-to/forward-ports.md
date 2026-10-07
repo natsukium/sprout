@@ -22,12 +22,16 @@ $ sprout forward 8080:80
 
 ## Follow the branch you are on
 
-With no `-i`, a forward re-resolves its target on every new connection
-to the instance for the current branch of the worktree it was started in.
+With no `-i`, each new connection goes to the instance for the current
+branch of the worktree the forward was started in.
 Leave `sprout forward 8080` running, `git switch main`, `sprout up` the new branch,
 and the next request reaches `main`'s VM. An already-open keep-alive
 connection stays with the instance it first dialed, so reload the page to
 move to the new one.
+
+The forward notices a branch switch by watching the `HEAD` of the repository
+it found at startup. After changing which repository the directory belongs
+to, as when you `git init` a new one inside it, restart the forward.
 
 ## Pin to one instance
 
