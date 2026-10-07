@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -52,8 +55,8 @@ func newForwardCmd() *cobra.Command {
 		Short: "Forward host ports into the VM",
 		Long: `Forward host ports into the VM for as long as the command runs.
 
-Without --instance the target is re-resolved on every new connection, so a
-forward left running across a branch switch follows the checkout. Selecting an
+Without --instance each new connection goes to the current branch's instance,
+so a forward left running across a branch switch follows the checkout. Selecting an
 instance pins it for the process's whole life, which is what side-by-side
 comparison across branches needs.`,
 		GroupID: groupNetwork,
@@ -204,7 +207,61 @@ func forwardResolver(selector string) (func() (*Identity, error), error) {
 		}
 		return func() (*Identity, error) { return id, nil }, nil
 	}
-	return func() (*Identity, error) { return resolveIdentity("") }, nil
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return worktreeResolver(cwd), nil
+}
+
+func worktreeResolver(cwd string) func() (*Identity, error) {
+	resolve := func() (*Identity, error) { return resolveIdentityAt("", cwd) }
+	head, err := gitQuery(cwd, "rev-parse", "--git-path", "HEAD")
+	if err != nil {
+		// Outside a repository there is no HEAD to key on, and a `git init`
+		// later must still move the forward onto the branch instance.
+		return resolve
+	}
+	if !filepath.IsAbs(head) {
+		head = filepath.Join(cwd, head)
+	}
+	return headTrackingResolver(head, resolve)
+}
+
+// Resolving runs git, which costs more than a short-lived connection itself:
+// a benchmark opening thousands per second kept several host cores busy on
+// it. Every branch switch rewrites HEAD, so its bytes are the cache key.
+func headTrackingResolver(headPath string, resolve func() (*Identity, error)) func() (*Identity, error) {
+	var mu sync.Mutex
+	var cachedHead []byte
+	var cached *Identity
+	return func() (*Identity, error) {
+		head, readErr := os.ReadFile(headPath)
+		mu.Lock()
+		defer mu.Unlock()
+		if readErr == nil && cached != nil && bytes.Equal(head, cachedHead) {
+			return cached, nil
+		}
+		id, err := resolve()
+		if err != nil {
+			return nil, err
+		}
+		cached, cachedHead = nil, nil
+		// HEAD can switch away and back while git runs, so rereading it
+		// cannot tell whether id still belongs to these bytes.
+		if readErr == nil && identityMatchesHead(id, head) {
+			cached, cachedHead = id, head
+		}
+		return id, nil
+	}
+}
+
+func identityMatchesHead(id *Identity, head []byte) bool {
+	branch, onBranch := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: refs/heads/")
+	if onBranch {
+		return id.KeySource == "branch" && id.Name == branch
+	}
+	return id.KeySource != "branch"
 }
 
 func forwardAccept(ln net.Listener, resolve func() (*Identity, error), guestPort int) {
