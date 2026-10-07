@@ -10,6 +10,7 @@
         { pkgs, ... }:
         {
           environment.systemPackages = [ pkgs.git ];
+          users.users.svc.isNormalUser = true;
         }
       )
     ];
@@ -26,6 +27,9 @@
     guest main 'echo from-guest >guest-file'
     test "$(cat guest-file)" = from-guest
     test -O guest-file || fail "a guest write is not owned by the host user"
+
+    test "$(guest main 'cd /root && sh -lc pwd')" = /workspace || fail "the login user does not start in the workspace"
+    test "$(guest main 'su - svc -c pwd')" = /home/svc || fail "another user's login shell was moved into the workspace"
 
     git worktree add -q ../linked -b feature
     cd ../linked

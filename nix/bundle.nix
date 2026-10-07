@@ -244,7 +244,7 @@ let
         ++ entryModules
         ++ lib.optionals vmCfg.workspace [
           (import ./guest/worktree.nix { inherit gitCommonMount; })
-          ./guest/workspace-shell.nix
+          (import ./guest/workspace-shell.nix { inherit (guest) sshUser; })
         ]
         ++ vmCfg.modules;
       };
