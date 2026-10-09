@@ -593,6 +593,44 @@ func TestRouteRejectsSmugglingShapesWith400(t *testing.T) {
 	}
 }
 
+func TestRouteClosesAnIdleConnectionWithoutAResponse(t *testing.T) {
+	shortStateRoot(t)
+	r := &router{domain: "sprout.localhost", wake: true, headTimeout: 100 * time.Millisecond}
+	addr := startRouter(t, r)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	raw, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read: %v, want the router to close the connection", err)
+	}
+	if len(raw) != 0 {
+		t.Errorf("router wrote %q to a connection that sent nothing, want no bytes", raw)
+	}
+}
+
+func TestRouteAnswersAPartialHeadThatTimesOutWith400(t *testing.T) {
+	shortStateRoot(t)
+	r := &router{domain: "sprout.localhost", wake: true, headTimeout: 100 * time.Millisecond}
+	addr := startRouter(t, r)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: webapp.sprout.localhost\r\n")
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	raw, _ := io.ReadAll(conn)
+	if !strings.HasPrefix(string(raw), "HTTP/1.1 400 ") {
+		t.Errorf("response = %q, want a 400", raw)
+	}
+}
+
 // A guest ingress answers 404 for a Host its own rules do not match, which by
 // status alone is indistinguishable from the router's 404. Only pages the
 // router wrote carry the Server header.

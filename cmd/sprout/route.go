@@ -292,10 +292,11 @@ func loopbackBind(addr string) bool {
 }
 
 type router struct {
-	domain  string
-	port    int
-	wake    bool
-	verbose bool
+	domain      string
+	port        int
+	wake        bool
+	verbose     bool
+	headTimeout time.Duration
 
 	mu       sync.Mutex
 	wakes    map[string]*wakeWatch
@@ -343,9 +344,18 @@ func (r *router) handle(conn net.Conn) {
 	// ErrBufferFull (→ 431) instead of growing unbounded.
 	br := bufio.NewReaderSize(conn, maxRouteHead)
 	// Cleared below, so it never fires mid-splice on a long-lived connection.
-	_ = conn.SetReadDeadline(time.Now().Add(routeHeadReadTimeout))
+	headTimeout := r.headTimeout
+	if headTimeout == 0 {
+		headTimeout = routeHeadReadTimeout
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(headTimeout))
 	host, head, err := sniffHost(br)
 	if err != nil {
+		// A browser preconnects and may send its request after the deadline;
+		// a 400 written now would be read as that request's response.
+		if len(head) == 0 {
+			return
+		}
 		r.logRequest(conn.RemoteAddr().String(), head, fmt.Sprintf("rejected: %v", err))
 		if errors.Is(err, errHeadTooLarge) {
 			r.writeError(conn, http.StatusRequestHeaderFieldsTooLarge, "Request header too large", "")
