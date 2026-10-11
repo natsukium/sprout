@@ -7,7 +7,7 @@ require (
 	github.com/miekg/dns v1.1.73
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.49.0
 	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798
 	pgregory.net/rapid v1.3.0
 )
