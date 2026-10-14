@@ -8,7 +8,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.49.0
-	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798
+	gvisor.dev/gvisor v0.0.0-20261014210845-8c04d4826db8
 	pgregory.net/rapid v1.3.0
 )
 
