@@ -19,6 +19,13 @@
       matchUpdateTypes: ["minor", "patch", "digest", "pin", "pinDigest", "lockFileMaintenance"],
       automerge: true,
     },
+    // A digest update moves gvisor to its master tip, which is not buildable
+    // as a Go module; gvisor-tap-vsock bumps pull it along the go branch.
+    {
+      matchPackageNames: ["gvisor.dev/gvisor"],
+      matchUpdateTypes: ["digest"],
+      enabled: false,
+    },
     // go.sum moves the vendor tree, and a nixpkgs bump can move it too through
     // the Go toolchain that vendors it.
     {
