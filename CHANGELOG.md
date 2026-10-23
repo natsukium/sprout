@@ -8,13 +8,7 @@ change between releases (see
 
 ## [0.2.2](https://github.com/natsukium/sprout/compare/v0.2.1...v0.2.2) - 2026-10-23
 
-Nothing to change when upgrading. A login shell now starts in `/workspace`
-only for the user that `sprout shell` and the console log in as, so an account
-entered with `sudo -i -u` or `su -` starts in its own home again; a
-`loginShellInit` that undid the jump for such an account can be dropped.
-`sprout forward` without `--instance` no longer runs git for every new
-connection, which kept host cores busy under load tests that open many short
-connections.
+Bug fixes and a lighter `sprout forward`; nothing to change when upgrading.
 
 ### Changed
 
