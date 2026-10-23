@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 change between releases (see
 [compatibility and release policy](docs/reference/compatibility.md)).
 
+## [0.2.2](https://github.com/natsukium/sprout/compare/v0.2.1...v0.2.2) - 2026-10-23
+
+Nothing to change when upgrading. A login shell now starts in `/workspace`
+only for the user that `sprout shell` and the console log in as, so an account
+entered with `sudo -i -u` or `su -` starts in its own home again; a
+`loginShellInit` that undid the jump for such an account can be dropped.
+`sprout forward` without `--instance` no longer runs git for every new
+connection, which kept host cores busy under load tests that open many short
+connections.
+
+### Changed
+
+- Resolve the target instance only when HEAD changes ([#57](https://github.com/natsukium/sprout/pull/57))
+
+### Fixed
+
+- Move only sprout's login user into /workspace at login ([#58](https://github.com/natsukium/sprout/pull/58))
+- Close a connection that sends nothing instead of answering 400 ([#60](https://github.com/natsukium/sprout/pull/60))
+
 ## [0.2.1](https://github.com/natsukium/sprout/compare/v0.2.0...v0.2.1) - 2026-10-06
 
 A cache can now belong to a non-root guest user, such as a distroless pod's
