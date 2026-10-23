@@ -78,7 +78,7 @@ pkgs:
 pkgs.runCommand "credential-host-check" { cases = lib.concatStringsSep "\n" cases; } ''
   status=0
   while read -r path host name drv; do
-    system=$(grep -o '("system","[^"]*")' "$drv" | cut -d '"' -f 4)
+    system=$(grep -o '\],"[^"]*","/nix/store/[^"]*",\[' "$drv" | head -n 1 | cut -d '"' -f 2)
     if [ "$system" != "$host" ]; then
       echo "$path: $host bundle records $name's exec built for $system ($drv)" >&2
       status=1
