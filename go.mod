@@ -6,7 +6,7 @@ require (
 	github.com/containers/gvisor-tap-vsock v0.9.0
 	github.com/miekg/dns v1.1.73
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	golang.org/x/sys v0.49.0
 	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798
 	pgregory.net/rapid v1.3.0
