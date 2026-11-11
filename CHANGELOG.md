@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 change between releases (see
 [compatibility and release policy](docs/reference/compatibility.md)).
 
+## [0.2.3](https://github.com/natsukium/sprout/compare/v0.2.2...v0.2.3) - 2026-11-12
+
+On Linux hosts the guest now hands the memory it frees back to the host, so
+`sprout list`'s MEM drops after a workload instead of staying at its peak.
+`modules = [ { microvm.balloon = false; } ];` turns it off. macOS hosts are
+unchanged.
+
+### Added
+
+- Enable free page reporting by default ([#75](https://github.com/natsukium/sprout/pull/75))
+
 ## [0.2.2](https://github.com/natsukium/sprout/compare/v0.2.1...v0.2.2) - 2026-10-23
 
 Bug fixes and a lighter `sprout forward`; nothing to change when upgrading.
