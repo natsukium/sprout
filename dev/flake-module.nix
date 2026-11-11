@@ -294,6 +294,30 @@ in
             "8GiB"
           ];
           failures = lib.runTests {
+            testDefaultLinuxGuestsEnableBalloon = {
+              expr = map (host: (guestOn host { }).microvm.balloon) [
+                "x86_64-linux"
+                "aarch64-linux"
+              ];
+              expected = [
+                true
+                true
+              ];
+            };
+            testUserModuleCanDisableBalloon = {
+              expr = map (host: (withModule host { microvm.balloon = false; }).microvm.balloon) [
+                "x86_64-linux"
+                "aarch64-linux"
+              ];
+              expected = [
+                false
+                false
+              ];
+            };
+            testVfkitGuestKeepsBalloonDisabled = {
+              expr = (guestOn "aarch64-darwin" { }).microvm.balloon;
+              expected = false;
+            };
             testX86_64RunnerDialsTheNetSocketWithTheLeaseMac = {
               expr = nic "x86_64-linux";
               expected = expectedNic (vmOn "x86_64-linux" { }).manifest.guest.mac;

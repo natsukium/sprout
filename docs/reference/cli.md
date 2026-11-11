@@ -196,10 +196,15 @@ volumes (see [instance identity](../explanation/instances.md)).
 | `WORKSPACE` | The worktree the instance was booted from. |
 
 `CPU` and `MEM` are host-side occupancy, not guest-internal usage: `MEM` is how
-much host RAM the hypervisor holds, which rises to a high-water mark and does
-not shrink when the guest frees memory. On Linux, PSS splits guest RAM that
-QEMU shares with each virtiofsd between them, so it is counted once. To judge whether a guest could run with
-a smaller `mem` allocation, look inside it instead, e.g. `sprout exec -- free -m`.
+much host RAM the hypervisor holds. On macOS it rises to a high-water mark and
+does not shrink when the guest frees memory. On Linux, unless
+`microvm.balloon` is off, the guest returns the memory it frees to the host,
+yet `MEM` stays above the `used` column of the guest's `free -m`: the guest's
+page cache counts until the guest drops it, and the guest returns free memory
+only in blocks of 2 MiB or more. On Linux, PSS
+splits guest RAM that QEMU shares with each virtiofsd between them, so it is
+counted once. To judge whether a guest could run with a smaller `mem`
+allocation, look inside it instead, e.g. `sprout exec -- free -m`.
 Both read `-` for a stopped instance, and when the sample failed.
 
 ## `sprout list` states

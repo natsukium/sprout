@@ -95,6 +95,8 @@ in
     {
       microvm = {
         hypervisor = "qemu";
+        # The shared memfd retains touched pages unless the guest reports what it frees.
+        balloon = lib.mkDefault true;
         # Ahead of microvm.nix's own creation, which then finds the image and
         # skips it: that one marks the file No_COW, and btrfs refuses to
         # reflink a No_COW file, so every snapshot and fork would be a full
