@@ -64,6 +64,23 @@ in
       checks.guest-host-gating =
         let
           guestOn = host: self.nixosConfigurations."sprout-${host}-dev".config;
+          reclaimOn =
+            host:
+            let
+              cfg = guestOn host;
+              inherit (self.sproutConfigurations.${host}.dev.manifest) guest;
+              socket = cfg.systemd.sockets.sprout-virtiofs-reclaim;
+            in
+            {
+              enabled = builtins.elem "sockets.target" socket.wantedBy;
+              matchesPort = socket.socketConfig.ListenStream == toString guest.reclaimPort;
+              firewallOpen = builtins.elem guest.reclaimPort cfg.networking.firewall.allowedTCPPorts;
+              gatewayOnly =
+                socket.socketConfig.IPAddressAllow == guest.gatewayIp && socket.socketConfig.IPAddressDeny == "any";
+              perConnection =
+                socket.socketConfig.Accept && cfg.systemd.units ? "sprout-virtiofs-reclaim@.service";
+            };
+          hosts = builtins.attrNames self.sproutConfigurations;
           apfsRepair = cfg: {
             unit = cfg.systemd.units ? "fix-iptables-case-hack.service";
             loginEnv = cfg.environment.variables ? XTABLES_LIBDIR;
@@ -87,6 +104,16 @@ in
             testX86_64LinuxHostedGuestOmitsApfsRepair = {
               expr = apfsRepair (guestOn "x86_64-linux");
               expected = absent;
+            };
+            testEveryGuestListensOnTheAdvertisedReclaimPort = {
+              expr = lib.genAttrs hosts reclaimOn;
+              expected = lib.genAttrs hosts (_: {
+                enabled = true;
+                matchesPort = true;
+                firewallOpen = true;
+                gatewayOnly = true;
+                perConnection = true;
+              });
             };
           };
         in
