@@ -124,6 +124,7 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 		return fmt.Errorf("%s runner start: %w", kind, err)
 	}
 	fmt.Printf("instance %q booting (%s runner pid %d) …\n", inst.Name, kind, cmd.Process.Pid)
+	startReclaimWatch(ctx, vn, m)
 
 	ctl := m.contract.control
 	vmControl := func() (string, error) { return relinkedSocket(socketDirBase(), dir, socks.vmControl) }

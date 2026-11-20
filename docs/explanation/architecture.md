@@ -187,8 +187,51 @@ The guest crosses the VM boundary through these paths:
   grants a remote host; withhold the credential from definitions that run
   workloads you would not agent-forward to.
 
-In the other direction, the host reaches the guest only through the daemon's
-control socket (0700, per-instance). Materialized credentials exist on the
-host disk only while the daemon runs: the daemon deletes them on every exit
-it can see, and for the exits it cannot (SIGKILL, a host crash) the next
-`sprout stop` or boot sweeps the leftovers before anything else happens.
+In the other direction, the host reaches the guest only through the daemon.
+Host clients use its per-instance control socket (0700), and the daemon
+connects directly for [virtiofs reclaim](#virtiofs-file-limits-on-macos).
+Materialized credentials exist on the host disk only while the daemon runs:
+the daemon deletes them on every exit it can see, and for the exits it cannot
+(SIGKILL, a host crash) the next `sprout stop` or boot sweeps the leftovers
+before anything else happens.
+
+## Virtiofs file limits on macOS
+
+Virtualization.framework keeps a host file open for each cached virtiofs
+inode. A guest with spare memory can keep those inodes indefinitely.
+All instances and other host processes share the same macOS file table, so
+walking a large share can leave other processes unable to open files.
+
+Each macOS instance's daemon samples `kern.num_files` every five seconds.
+At 75% of `kern.maxfiles` or higher, it asks its guest to reclaim. The guest
+uses `drop_caches` to drop reclaimable dentries and inodes across all guest
+filesystems. When the guest accesses those paths again, it re-reads their
+metadata and any file contents cached for the inodes it evicted.
+
+After a reclaim that freed at least 1% of the host file table, the daemon
+waits 60 seconds before asking again. While reclaims free less or fail, it
+waits longer, up to 10 minutes. The daemon log shows each reclaim and the
+wait that follows it. If usage stays high through 10-minute waits, the files
+are held by something a reclaim cannot free: other host processes, or files
+the guest keeps open.
+
+The guest listens on TCP port 61981 and accepts connections only from its
+gateway. Anything that can reach the instance through its daemon can
+request reclaim, including clients using `sprout forward` or the router.
+The guest drops caches at most once every 30 seconds, whoever asks.
+
+Apple states that Virtualization.framework closes these files itself as its
+process nears the per-process limit, `kern.maxfilesperproc` ([Apple Developer
+Forums](https://developer.apple.com/forums/thread/741572)), so sprout watches
+only the shared table.
+
+Reclaim needs `CGROUP_BPF` in the guest kernel, and the build fails without
+it. To build a custom kernel without it, or when repeated cache drops cost
+your workload more than the host files are worth, add this guest module to
+the definition.
+
+```nix
+sprout.vms.dev.modules = [
+  { systemd.sockets.sprout-virtiofs-reclaim.enable = false; }
+];
+```
