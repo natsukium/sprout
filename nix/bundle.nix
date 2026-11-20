@@ -51,6 +51,7 @@ let
     # this IP, so the host side never has to discover it.
     ip = "192.168.127.2";
     gatewayIp = "192.168.127.1";
+    reclaimPort = 61981;
     subnet = "192.168.127.0/24";
     mac = "02:00:00:00:00:02";
     sshUser = "root";
@@ -184,6 +185,7 @@ let
             inherit guest dataMount;
             inherit (hostPkgs.stdenv) hostPlatform;
           })
+          (import ./guest/virtiofs-reclaim.nix { inherit guest; })
           {
             networking.hostName = lib.mkDefault "sprout-${name}";
             microvm = {
@@ -254,9 +256,16 @@ let
         definition = name;
         host.system = hostSystem;
         # system keys the host-side cache trees.
-        guest = guest // {
-          system = guestSystem;
-        };
+        guest =
+          (
+            if nixos.config.systemd.sockets.sprout-virtiofs-reclaim.enable then
+              guest
+            else
+              builtins.removeAttrs guest [ "reclaimPort" ]
+          )
+          // {
+            system = guestSystem;
+          };
         inherit (backend) backend;
         workspace = vmCfg.workspace;
         hostLoopback = vmCfg.hostLoopback;
