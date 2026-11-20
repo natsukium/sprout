@@ -150,6 +150,8 @@ func runDaemon(dir string, inst *Instance, m *Manifest, runScript string, sideca
 
 	go func() {
 		waitReady(ctx, vn, inst, readyFilePath(dir), func() { srv.ready.Store(true) })
+		// After waitReady, so a booting guest's refused dials never grow the back-off.
+		startReclaimWatch(ctx, vn, m)
 		// At readiness, not daemon start, so the ~30s boot never counts as
 		// idle time.
 		startIdleWatch(ctx, m, srv)

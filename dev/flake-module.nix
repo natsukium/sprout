@@ -72,7 +72,7 @@ in
               socket = cfg.systemd.sockets.sprout-virtiofs-reclaim;
             in
             {
-              enabled = builtins.elem "sockets.target" socket.wantedBy;
+              enabled = socket.enable && builtins.elem "sockets.target" socket.wantedBy;
               matchesPort = socket.socketConfig.ListenStream == toString guest.reclaimPort;
               firewallOpen = builtins.elem guest.reclaimPort cfg.networking.firewall.allowedTCPPorts;
               gatewayOnly =
@@ -114,6 +114,27 @@ in
                 gatewayOnly = true;
                 perConnection = true;
               });
+            };
+            testDisabledReclaimSocketOmitsPort = {
+              expr =
+                let
+                  vm = self.lib.mkVM {
+                    pkgs = withSystem "aarch64-darwin" ({ pkgs, ... }: pkgs);
+                    modules = [ { systemd.sockets.sprout-virtiofs-reclaim.enable = false; } ];
+                  };
+                  cfg = vm.nixos.config;
+                  port = self.sproutConfigurations.aarch64-darwin.dev.manifest.guest.reclaimPort;
+                in
+                {
+                  enabled = cfg.systemd.units."sprout-virtiofs-reclaim.socket".enable;
+                  advertised = vm.manifest.guest ? reclaimPort;
+                  firewallOpen = builtins.elem port cfg.networking.firewall.allowedTCPPorts;
+                };
+              expected = {
+                enabled = false;
+                advertised = false;
+                firewallOpen = false;
+              };
             };
           };
         in

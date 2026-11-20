@@ -187,8 +187,64 @@ The guest crosses the VM boundary through these paths:
   grants a remote host; withhold the credential from definitions that run
   workloads you would not agent-forward to.
 
-In the other direction, the host reaches the guest only through the daemon's
-control socket (0700, per-instance). Materialized credentials exist on the
-host disk only while the daemon runs: the daemon deletes them on every exit
-it can see, and for the exits it cannot (SIGKILL, a host crash) the next
-`sprout stop` or boot sweeps the leftovers before anything else happens.
+In the other direction, the host reaches the guest only through the daemon.
+Host clients use its per-instance control socket (0700), and the daemon
+connects directly for [virtiofs reclaim](#virtiofs-file-limits-on-macos).
+Materialized credentials exist on the host disk only while the daemon runs:
+the daemon deletes them on every exit it can see, and for the exits it cannot
+(SIGKILL, a host crash) the next `sprout stop` or boot sweeps the leftovers
+before anything else happens.
+
+## Virtiofs file limits on macOS
+
+Virtualization.framework keeps a host file open for each cached virtiofs
+inode. A guest with spare memory can keep those inodes indefinitely.
+Each open file takes an entry in the host's file table and a vnode from the
+host's vnode table. Instances that cache the same host file hold one file
+each but share its vnode, so either table can fill first. All instances and
+other host processes share both tables, so walking a large share can make
+other processes fail with `ENFILE`.
+
+Once its guest is ready, each macOS instance's daemon samples both tables
+every five seconds: open
+files (`kern.num_files` of `kern.maxfiles`) and vnodes in use
+(`kern.num_vnodes` minus `kern.free_vnodes`, of `kern.maxvnodes`). When
+either table is 75% full, the daemon asks its guest to reclaim. The guest
+uses `drop_caches` to drop reclaimable dentries and inodes across all guest
+filesystems. When the guest accesses those paths again, it re-reads their
+metadata and any file contents cached for the inodes it evicted.
+
+When the guest's `fuse_inode` count falls by at least 1% of the fuller
+table's limit, the daemon waits 60 seconds before asking again. When it falls
+by less, the daemon doubles the wait, up to 10 minutes. The first two failed
+requests in a row are retried after 15 seconds. From the third, a failure
+counts like a reclaim that freed too little. A rise of 5 percentage points in
+the fuller table since the last request ends a wait longer than 60 seconds
+early and restarts the back-off at 60 seconds.
+
+The daemon log has a line for each request: `up.log` in the [instance
+directory](../reference/instance-state.md), or the supervisor's log under
+`--foreground`. The line shows both tables as sampled before the request,
+the guest's `fuse_inode` count before and after, and the wait that follows
+(`cooldown`, or `retry delay` after a failure). If usage stays high through
+10-minute waits, the files are held by something a reclaim cannot free:
+other host processes, or files the guest keeps open.
+
+The guest listens on TCP port 61981 and accepts connections only from its
+gateway. If another guest service holds that port, reclaim requests fail.
+Any client that reaches the guest through the daemon can request reclaim,
+including `sprout forward` and the [router](../how-to/route.md). The guest
+drops caches at most once every 30 seconds, whoever asks, and the daemon
+logs a request inside that window as skipped.
+
+Reclaim needs `CGROUP_BPF` in every guest kernel, on Linux hosts too,
+because systemd uses it to accept connections only from the gateway, and the
+build fails without it. To build a custom kernel without it, or when repeated
+cache drops cost your workload more than the risk of filling the host tables,
+add this guest module to the definition.
+
+```nix
+sprout.vms.dev.modules = [
+  { systemd.sockets.sprout-virtiofs-reclaim.enable = false; }
+];
+```

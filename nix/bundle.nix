@@ -256,9 +256,16 @@ let
         definition = name;
         host.system = hostSystem;
         # system keys the host-side cache trees.
-        guest = guest // {
-          system = guestSystem;
-        };
+        guest =
+          (
+            if nixos.config.systemd.sockets.sprout-virtiofs-reclaim.enable then
+              guest
+            else
+              builtins.removeAttrs guest [ "reclaimPort" ]
+          )
+          // {
+            system = guestSystem;
+          };
         inherit (backend) backend;
         workspace = vmCfg.workspace;
         hostLoopback = vmCfg.hostLoopback;

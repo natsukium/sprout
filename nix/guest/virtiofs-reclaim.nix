@@ -3,12 +3,20 @@
 # those inodes indefinitely, so the host's sprout daemon calls
 # sprout-virtiofs-reclaim.socket when the host's file or vnode table runs short.
 { guest }:
-{ config, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  enabled = config.systemd.sockets.sprout-virtiofs-reclaim.enable;
+in
 {
   # systemd needs cgroup BPF to enforce the gateway allowlist.
-  system.requiredKernelConfig = [ (config.lib.kernelConfig.isYes "CGROUP_BPF") ];
+  system.requiredKernelConfig = lib.optional enabled (config.lib.kernelConfig.isYes "CGROUP_BPF");
 
-  networking.firewall.allowedTCPPorts = [ guest.reclaimPort ];
+  networking.firewall.allowedTCPPorts = lib.optional enabled guest.reclaimPort;
 
   systemd.sockets.sprout-virtiofs-reclaim = {
     wantedBy = [ "sockets.target" ];
