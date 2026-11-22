@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/transport"
@@ -31,9 +36,56 @@ func (vfkitUnixgram) serve(ctx context.Context, vn *virtualnetwork.VirtualNetwor
 		<-ctx.Done()
 		ln.Close()
 	}()
-	accept := func() (net.Conn, error) { return transport.AcceptVfkit(ln) }
+	accept := func() (net.Conn, error) {
+		conn, err := transport.AcceptVfkit(ln)
+		if err != nil {
+			return nil, err
+		}
+		return &vfkitDatagramConn{Conn: conn}, nil
+	}
 	go serveNICSessions(ctx, "vfkit", accept, vn.AcceptVfkit)
 	return nil
+}
+
+const vfkitDropLogInterval = time.Second
+
+// A failed datagram send loses one Ethernet frame. Returning the error would
+// make the switch close the listener and forget the guest's MAC address.
+type vfkitDatagramConn struct {
+	net.Conn
+	dropMu          sync.Mutex
+	nextDropLog     time.Time
+	unreportedDrops atomic.Uint64
+}
+
+func (c *vfkitDatagramConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if err == nil {
+		if c.unreportedDrops.Load() != 0 {
+			if dropped := c.unreportedDrops.Swap(0); dropped != 0 {
+				log.Printf("vfkit network: send recovered: unreported drops=%d", dropped)
+			}
+		}
+		return n, nil
+	}
+
+	// The switch retries ENOBUFS when vfkit's receive buffer is full.
+	// Pass net.ErrClosed through for the switch's usual disconnect when the
+	// daemon closes the listener and keep shutdown out of the drop log.
+	if errors.Is(err, syscall.ENOBUFS) || errors.Is(err, net.ErrClosed) {
+		return n, err
+	}
+
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	if now := time.Now(); !now.Before(c.nextDropLog) {
+		dropped := 1 + c.unreportedDrops.Swap(0)
+		log.Printf("vfkit network: dropped frames: count=%d, latest error=%v", dropped, err)
+		c.nextDropLog = now.Add(vfkitDropLogInterval)
+	} else {
+		c.unreportedDrops.Add(1)
+	}
+	return len(b), nil
 }
 
 type vfkitREST struct{}
