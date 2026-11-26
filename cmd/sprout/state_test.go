@@ -203,6 +203,47 @@ func TestManifestHostLoopbackDefaultsOff(t *testing.T) {
 	}
 }
 
+func TestManifestReclaimPort(t *testing.T) {
+	const host = "aarch64-darwin"
+	for _, tt := range []struct {
+		name    string
+		wire    json.RawMessage
+		want    uint16
+		invalid bool
+	}{
+		{name: "omitted"},
+		{name: "present", wire: json.RawMessage("12345"), want: 12345},
+		{name: "minimum", wire: json.RawMessage("1"), want: 1},
+		{name: "maximum", wire: json.RawMessage("65535"), want: 65535},
+		{name: "zero", wire: json.RawMessage("0")},
+		{name: "negative", wire: json.RawMessage("-1"), invalid: true},
+		{name: "too large", wire: json.RawMessage("65536"), invalid: true},
+		{name: "null", wire: json.RawMessage("null")},
+		{name: "string", wire: json.RawMessage(`"12345"`), invalid: true},
+		{name: "fractional", wire: json.RawMessage("123.45"), invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := v2ManifestDoc(host, "vfkit")
+			if tt.wire != nil {
+				doc["guest"].(map[string]any)["reclaimPort"] = tt.wire
+			}
+			m, err := parseManifest(encodeDoc(t, doc), host)
+			if tt.invalid {
+				if err == nil || !strings.Contains(err.Error(), "guest.reclaimPort") {
+					t.Fatalf("parseManifest error = %v, want a guest.reclaimPort error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Guest.ReclaimPort != tt.want {
+				t.Fatalf("guest.reclaimPort = %d, want %d", m.Guest.ReclaimPort, tt.want)
+			}
+		})
+	}
+}
+
 // The manifest is the Nix to Go trust boundary, so arbitrary bytes must never
 // panic, and nothing passes without meeting the version gate and yielding a
 // contract.

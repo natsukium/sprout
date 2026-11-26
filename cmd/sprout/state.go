@@ -20,12 +20,13 @@ type Manifest struct {
 		System string `json:"system"`
 	} `json:"host"`
 	Guest struct {
-		System    string `json:"system"`
-		IP        string `json:"ip"`
-		GatewayIP string `json:"gatewayIp"`
-		Subnet    string `json:"subnet"`
-		MAC       string `json:"mac"`
-		SSHUser   string `json:"sshUser"`
+		System      string `json:"system"`
+		IP          string `json:"ip"`
+		GatewayIP   string `json:"gatewayIp"`
+		Subnet      string `json:"subnet"`
+		MAC         string `json:"mac"`
+		SSHUser     string `json:"sshUser"`
+		ReclaimPort uint16 `json:"reclaimPort,omitempty"`
 	} `json:"guest"`
 	Backend   BackendSpec `json:"backend"`
 	Workspace bool        `json:"workspace"`

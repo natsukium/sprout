@@ -187,8 +187,41 @@ The guest crosses the VM boundary through these paths:
   grants a remote host; withhold the credential from definitions that run
   workloads you would not agent-forward to.
 
-In the other direction, the host reaches the guest only through the daemon's
-control socket (0700, per-instance). Materialized credentials exist on the
-host disk only while the daemon runs: the daemon deletes them on every exit
-it can see, and for the exits it cannot (SIGKILL, a host crash) the next
-`sprout stop` or boot sweeps the leftovers before anything else happens.
+In the other direction, the host reaches the guest only through the daemon.
+Host clients use its per-instance control socket (0700), and the daemon
+connects directly for [virtiofs reclaim](#virtiofs-file-limits-on-macos).
+Materialized credentials exist on the host disk only while the daemon runs:
+the daemon deletes them on every exit it can see, and for the exits it cannot
+(SIGKILL, a host crash) the next `sprout stop` or boot sweeps the leftovers
+before anything else happens.
+
+## Virtiofs file limits on macOS
+
+Virtualization.framework keeps a host file open for each cached virtiofs inode
+until the guest evicts it, which a guest with spare memory may never do. Every
+instance shares the host's file and vnode tables with all other host processes
+(instances caching the same file share one vnode but hold one file each), so
+walking a large share can exhaust either table and make host processes fail
+with `ENFILE`.
+
+On macOS, each instance's daemon watches both host tables and asks its guest to
+reclaim when either reaches 75% full, backing off if reclaims stop freeing
+much. The guest runs `echo 2 > /proc/sys/vm/drop_caches` to drop reclaimable
+dentries and inodes across all guest filesystems (files kept open by guest or
+host processes are unaffected). Each request is logged in `up.log` (see
+[instance state](../reference/instance-state.md)), or the supervisor's log
+under `--foreground`.
+
+The guest listens on reserved TCP port 61981, accepting connections only from
+its gateway and dropping caches at most once every 30 seconds (since
+`sprout forward` and the [router](../how-to/route.md) can also reach it); if
+another guest service binds that port, reclaim fails. Because systemd enforces
+the gateway allowlist with `CGROUP_BPF`, every guest kernel — on Linux hosts
+too — requires it unless you disable the socket (also useful when repeated
+cache drops hurt your workload more than host table pressure):
+
+```nix
+sprout.vms.dev.modules = [
+  { systemd.sockets.sprout-virtiofs-reclaim.enable = false; }
+];
+```
