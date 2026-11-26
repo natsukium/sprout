@@ -1,7 +1,7 @@
 # SPROUT_SSHD is set only once setpriv has armed PDEATHSIG.
 if [ -z "${SPROUT_SSHD-}" ]; then
-  "$@"
-  exit
+	"$@"
+	exit
 fi
 sshd=$SPROUT_SSHD
 unset SPROUT_SSHD
@@ -10,19 +10,19 @@ pid=
 fired=
 escalated=
 escalate() {
-  if [ -z "$pid" ] || [ -n "$escalated" ]; then
-    return 0
-  fi
-  escalated=1
-  # Until setsid runs there is no group, but the pid alone stops the child.
-  # Neither `--` nor `-s SIG` before a negative pid: dash rejects both.
-  kill -TERM "-$pid" 2>/dev/null
-  kill -TERM "$pid" 2>/dev/null
-  (
-    sleep 5
-    kill -KILL "-$pid" 2>/dev/null
-    kill -KILL "$pid" 2>/dev/null
-  ) </dev/null >/dev/null 2>&1 &
+	if [ -z "$pid" ] || [ -n "$escalated" ]; then
+		return 0
+	fi
+	escalated=1
+	# Until setsid runs there is no group, but the pid alone stops the child.
+	# Neither `--` nor `-s SIG` before a negative pid: dash rejects both.
+	kill -TERM "-$pid" 2>/dev/null
+	kill -TERM "$pid" 2>/dev/null
+	(
+		sleep 5
+		kill -KILL "-$pid" 2>/dev/null
+		kill -KILL "$pid" 2>/dev/null
+	) </dev/null >/dev/null 2>&1 &
 }
 trap 'fired=1; escalate' TERM HUP
 
@@ -39,10 +39,10 @@ exec 3<&-
 [ -z "$fired" ] || escalate
 
 while :; do
-  wait "$pid"
-  st=$?
-  # A trapped signal also ends wait early.
-  kill -0 "$pid" 2>/dev/null || break
+	wait "$pid"
+	st=$?
+	# A trapped signal also ends wait early.
+	kill -0 "$pid" 2>/dev/null || break
 done
 
 # A leftover job still writing to the session keeps ssh open, so it stays
@@ -50,18 +50,18 @@ done
 # of a pipe reads as the same link.
 glob_escape() { printf '%s' "$1" | sed 's/[][*?\\]/\\&/g'; }
 session_fd() {
-  case $1 in
-  pipe:* | socket:*) glob_escape "$1" ;;
-  *) printf '%s' "no-such-link" ;;
-  esac
+	case $1 in
+	pipe:* | socket:*) glob_escape "$1" ;;
+	*) printf '%s' "no-such-link" ;;
+	esac
 }
 out=$(session_fd "$(readlink /proc/$$/fd/1)")
 err=$(session_fd "$(readlink /proc/$$/fd/2)")
 session_held() {
-  find /proc/[0-9]*/fd -maxdepth 1 \( -lname "$out" -o -lname "$err" \) 2>/dev/null |
-    grep -v -e "^/proc/$$/" -e "^/proc/$sshd/" | grep -q .
+	find /proc/[0-9]*/fd -maxdepth 1 \( -lname "$out" -o -lname "$err" \) 2>/dev/null |
+		grep -v -e "^/proc/$$/" -e "^/proc/$sshd/" | grep -q .
 }
 while [ -z "$fired" ] && session_held </dev/null >/dev/null 2>&1; do
-  sleep 1 </dev/null >/dev/null 2>&1
+	sleep 1 </dev/null >/dev/null 2>&1
 done
 exit "$st"
