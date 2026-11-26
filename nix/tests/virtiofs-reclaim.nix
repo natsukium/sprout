@@ -36,7 +36,6 @@
     request_reclaim() {
       local deadline=30
       # Keep stdin open past the deadline so only guest EOF can end the dial.
-      # The sentinel preserves the reply's trailing newline.
       reply=$(${pkgs.coreutils}/bin/timeout "''${deadline}s" sprout dial-stdio -i reclaim "$ip:$port" < <(sleep "$((deadline + 5))") && printf '.') \
         || fail "reclaim dial failed or stayed open for at least $deadline s"
     }

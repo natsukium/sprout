@@ -15,9 +15,7 @@ import (
 )
 
 const (
-	reclaimSampleInterval = 5 * time.Second
-	// Leave a quarter of either table for growth between samples and while the
-	// guest reclaims.
+	reclaimSampleInterval  = 5 * time.Second
 	reclaimTriggerPermille = 750
 	reclaimCooldown        = time.Minute
 	reclaimMaxCooldown     = 10 * time.Minute
@@ -84,8 +82,6 @@ func startHostTableWatch(ctx context.Context, vn dialer, m *Manifest, sysctl fun
 				continue
 			}
 
-			// The dial through vn bypasses the session tracker, so reclaim never
-			// counts as activity for idle auto-stop.
 			usageAtRequest = usage
 			reply, err := requestReclaim(ctx, vn, addr)
 			if ctx.Err() != nil {
@@ -127,18 +123,10 @@ func startHostTableWatch(ctx context.Context, vn dialer, m *Manifest, sysctl fun
 	}()
 }
 
-// Each distinct cached guest file costs a host vnode. On a 128 GiB Apple
-// silicon Mac, kern.maxvnodes is about half kern.maxfiles (263,168 vs 491,520).
-// A full vnode table makes new_vnode return ENFILE, even when a unixgram
-// sendto looks up the peer socket path without opening a file. Instances
-// caching the same file share one vnode but hold one file each, so either
-// table can fill first.
-//
-// XNU can count open vnodes as free until their 25th reference or until
-// new_vnode walks past them. So the in-use count can read low. But new_vnode
-// drops each open vnode it finds on the free list and fails only when no
-// reusable vnode is left, so vnodes in use reach kern.maxvnodes before
-// new_vnode returns ENFILE.
+// Sample both tables: instances caching the same file share one vnode but hold
+// one file each, so either can hit ENFILE first. XNU may leave open vnodes on
+// kern.free_vnodes until recycled, so in-use reads low under light load, but
+// still reaches kern.maxvnodes before ENFILE.
 func readHostTables(sysctl func(string) (uint32, error)) (files, vnodes reclaimTable, err error) {
 	var freeVnodes uint64
 	for _, field := range []struct {
@@ -173,7 +161,6 @@ func requestReclaim(ctx context.Context, vn dialer, addr string) (reclaimReply, 
 		return reclaimReply{}, fmt.Errorf("dial guest: %w", err)
 	}
 	defer conn.Close()
-	// DialContextTCP only observes cancellation until the connection is made.
 	stopClose := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stopClose()
 	raw, err := io.ReadAll(io.LimitReader(conn, reclaimReplyBytes+1))

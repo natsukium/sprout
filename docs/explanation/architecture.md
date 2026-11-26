@@ -197,51 +197,28 @@ before anything else happens.
 
 ## Virtiofs file limits on macOS
 
-Virtualization.framework keeps a host file open for each cached virtiofs
-inode. A guest with spare memory can keep those inodes indefinitely.
-Each open file takes an entry in the host's file table and a vnode from the
-host's vnode table. Instances that cache the same host file hold one file
-each but share its vnode, so either table can fill first. All instances and
-other host processes share both tables, so walking a large share can make
-other processes fail with `ENFILE`.
+Virtualization.framework keeps a host file open for each cached virtiofs inode
+until the guest evicts it, which a guest with spare memory may never do. Every
+instance shares the host's file and vnode tables with all other host processes
+(instances caching the same file share one vnode but hold one file each), so
+walking a large share can exhaust either table and make host processes fail
+with `ENFILE`.
 
-Once its guest is ready, each macOS instance's daemon samples both tables
-every five seconds: open
-files (`kern.num_files` of `kern.maxfiles`) and vnodes in use
-(`kern.num_vnodes` minus `kern.free_vnodes`, of `kern.maxvnodes`). When
-either table is 75% full, the daemon asks its guest to reclaim. The guest
-uses `drop_caches` to drop reclaimable dentries and inodes across all guest
-filesystems. When the guest accesses those paths again, it re-reads their
-metadata and any file contents cached for the inodes it evicted.
+On macOS, each instance's daemon watches both host tables and asks its guest to
+reclaim when either reaches 75% full, backing off if reclaims stop freeing
+much. The guest runs `echo 2 > /proc/sys/vm/drop_caches` to drop reclaimable
+dentries and inodes across all guest filesystems (files kept open by guest or
+host processes are unaffected). Each request is logged in `up.log` (see
+[instance state](../reference/instance-state.md)), or the supervisor's log
+under `--foreground`.
 
-When the guest's `fuse_inode` count falls by at least 1% of the fuller
-table's limit, the daemon waits 60 seconds before asking again. When it falls
-by less, the daemon doubles the wait, up to 10 minutes. The first two failed
-requests in a row are retried after 15 seconds. From the third, a failure
-counts like a reclaim that freed too little. A rise of 5 percentage points in
-the fuller table since the last request ends a wait longer than 60 seconds
-early and restarts the back-off at 60 seconds.
-
-The daemon log has a line for each request: `up.log` in the [instance
-directory](../reference/instance-state.md), or the supervisor's log under
-`--foreground`. The line shows both tables as sampled before the request,
-the guest's `fuse_inode` count before and after, and the wait that follows
-(`cooldown`, or `retry delay` after a failure). If usage stays high through
-10-minute waits, the files are held by something a reclaim cannot free:
-other host processes, or files the guest keeps open.
-
-The guest listens on TCP port 61981 and accepts connections only from its
-gateway. If another guest service holds that port, reclaim requests fail.
-Any client that reaches the guest through the daemon can request reclaim,
-including `sprout forward` and the [router](../how-to/route.md). The guest
-drops caches at most once every 30 seconds, whoever asks, and the daemon
-logs a request inside that window as skipped.
-
-Reclaim needs `CGROUP_BPF` in every guest kernel, on Linux hosts too,
-because systemd uses it to accept connections only from the gateway, and the
-build fails without it. To build a custom kernel without it, or when repeated
-cache drops cost your workload more than the risk of filling the host tables,
-add this guest module to the definition.
+The guest listens on reserved TCP port 61981, accepting connections only from
+its gateway and dropping caches at most once every 30 seconds (since
+`sprout forward` and the [router](../how-to/route.md) can also reach it); if
+another guest service binds that port, reclaim fails. Because systemd enforces
+the gateway allowlist with `CGROUP_BPF`, every guest kernel — on Linux hosts
+too — requires it unless you disable the socket (also useful when repeated
+cache drops hurt your workload more than host table pressure):
 
 ```nix
 sprout.vms.dev.modules = [

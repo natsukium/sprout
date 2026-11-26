@@ -1,7 +1,5 @@
-# Virtualization.framework keeps a host file open for each cached virtiofs
-# inode until the guest evicts it. A guest without memory pressure can keep
-# those inodes indefinitely, so the host's sprout daemon calls
-# sprout-virtiofs-reclaim.socket when the host's file or vnode table runs short.
+# Virtualization.framework holds a host file open per cached virtiofs inode, so
+# the macOS daemon dials this socket to evict them under host table pressure.
 { guest }:
 {
   config,
@@ -13,7 +11,7 @@ let
   enabled = config.systemd.sockets.sprout-virtiofs-reclaim.enable;
 in
 {
-  # systemd needs cgroup BPF to enforce the gateway allowlist.
+  # IPAddressAllow requires CGROUP_BPF.
   system.requiredKernelConfig = lib.optional enabled (config.lib.kernelConfig.isYes "CGROUP_BPF");
 
   networking.firewall.allowedTCPPorts = lib.optional enabled guest.reclaimPort;
