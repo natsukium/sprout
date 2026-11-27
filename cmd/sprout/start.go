@@ -52,20 +52,7 @@ func startForeground(id *Identity, report *os.File) error {
 	if err != nil {
 		return err
 	}
-	// Retained through reconcileRoots: its migration path publishes a token,
-	// which requires the lifecycle lock.
-	lc, err := acquireLifecycleLock(id.ID)
-	if err != nil {
-		return err
-	}
-	defer lc.Close()
-	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			return &instanceNotFoundError{selector: id.ID}
-		}
-		return err
-	}
-	lock, err := claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id.ID) })
+	lock, inst, manifest, err := prepareStartBoot(id, dir, report)
 	// `start` boots the bundle already on record, so any serving daemon is the
 	// state it asked for; converging a changed definition is `up`'s job.
 	if errors.Is(err, errInstanceNowServing) {
@@ -75,19 +62,40 @@ func startForeground(id *Identity, report *os.File) error {
 	if err != nil {
 		return err
 	}
+	return bootInstanceLocked(dir, inst, manifest, lock)
+}
+
+func prepareStartBoot(id *Identity, dir string, report *os.File) (*os.File, *Instance, *Manifest, error) {
+	// Retained through reconcileRoots: its migration path publishes a token,
+	// which requires the lifecycle lock.
+	lc, err := acquireLifecycleLock(id.ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer lc.Close()
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil, &instanceNotFoundError{selector: id.ID}
+		}
+		return nil, nil, nil, err
+	}
+	lock, err := claimInstanceLocked(dir, instanceLockWait, func() bool { return instanceRunning(id.ID) })
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	reportClaimed(report)
 	// Swept here rather than left to the boot's cleanup, so a failed start
 	// does not exit with a SIGKILLed daemon's secrets still on disk.
 	if err := os.RemoveAll(credentialsDir(dir)); err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	// Loaded under the claim: before it binds the incarnation, a concurrent
 	// delete or `up` can replace the record.
 	inst, err := loadBootRecord(id.ID, id.Display(), dir)
 	if err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	// Lazy migration: a legacy record is resolved here and pinned and
 	// rewritten below, only once its bundle has been accepted, so a refusal
@@ -95,31 +103,30 @@ func startForeground(id *Identity, report *os.File) error {
 	canonical, err := canonicalBundlePath(inst.Bundle, inst.Name)
 	if err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	manifest, err := loadManifest(filepath.Join(canonical, "manifest.json"))
 	if err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	if err := checkInstancePlatform(id.Display(), inst.Platform, manifest.platform()); err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	if err := manifest.contract.bootable(); err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	if err := checkInstanceSocketPaths(dir, manifest); err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
 	if err := pinRecordedBundle(dir, inst, canonical); err != nil {
 		lock.Close()
-		return err
+		return nil, nil, nil, err
 	}
-	lc.Close()
-	return bootInstanceLocked(dir, inst, manifest, lock)
+	return lock, inst, manifest, nil
 }
 
 func stoppedError(id *Identity, selector string) error {

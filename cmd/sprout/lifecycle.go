@@ -121,7 +121,7 @@ func stopOne(id string, behavior stopBehavior) error {
 	if err := stop(id, name); err != nil {
 		return err
 	}
-	sweepStaleCredentialsLocked(dir, 2*time.Second)
+	sweepStaleCredentialsLocked(dir, stoppedExitWait)
 	if behavior.reportStopped {
 		fmt.Printf("instance %q stopped\n", name)
 	}
@@ -132,10 +132,8 @@ func stopOne(id string, behavior stopBehavior) error {
 // that follows.
 var bootingServeWait = 30 * time.Second
 
-// A daemon holds daemon.lock well before it serves control; reading that window
-// as stopped would let the boot finish after the stop reported success.
-// Holding the lifecycle lock here cannot stall it: a daemon takes none after
-// claiming.
+// Holding the lifecycle lock here cannot stall a booting daemon: a daemon
+// takes none after claiming.
 func awaitBootingDaemon(id, dir, name string) (bool, error) {
 	if instanceRunning(id) {
 		return true, nil
@@ -221,8 +219,10 @@ var guestSync = func(id string) error {
 	return nil
 }
 
-// Polled until the control socket goes quiet, so `stop && rm` compositions
-// are safe.
+// The stopped daemon's exit, and with it the flock, may trail its control
+// socket going quiet.
+var stoppedExitWait = 2 * time.Second
+
 func waitStopped(id, name string) error {
 	stopped := pollUntil(60*time.Second, 500*time.Millisecond, func() bool {
 		return !instanceRunning(id)
@@ -392,8 +392,6 @@ func deleteOne(t deleteTarget) error {
 		return err
 	}
 	defer lc.Close()
-	// Before the stop, not after the claim: the marker, not the claim, binds
-	// the stop to the incarnation the user confirmed.
 	if err := t.marker.verify(t.dir); err != nil {
 		return fmt.Errorf("instance %q: %w", name, err)
 	}
@@ -406,8 +404,7 @@ func deleteOne(t deleteTarget) error {
 			return err
 		}
 	}
-	// The stopped daemon's exit may trail its control socket going quiet.
-	lock, err := t.claim(2 * time.Second)
+	lock, err := t.claim(stoppedExitWait)
 	if err != nil {
 		return err
 	}
@@ -483,25 +480,14 @@ func cmdPrune(force bool) error {
 	if err != nil {
 		return err
 	}
-	var orphans []deleteTarget
+	orphans, err := pruneCandidates(ids)
 	defer func() {
 		for _, t := range orphans {
 			t.marker.Close()
 		}
 	}()
-	for _, id := range ids {
-		if instanceRunning(id) {
-			continue
-		}
-		inst, _, err := loadInstance(id)
-		if err != nil || !isOrphaned(inst) {
-			continue
-		}
-		t, err := newDeleteTarget(id)
-		if err != nil {
-			return err
-		}
-		orphans = append(orphans, t)
+	if err != nil {
+		return err
 	}
 
 	if len(orphans) == 0 {
@@ -514,27 +500,53 @@ func cmdPrune(force bool) error {
 	}
 	removed := 0
 	for _, t := range orphans {
-		ok, err := pruneOne(t)
+		err := pruneOne(t)
+		var skip *pruneSkip
+		if errors.As(err, &skip) {
+			fmt.Fprintln(os.Stderr, "skipping:", skip.reason)
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		if ok {
-			removed++
-		}
+		removed++
 	}
 	fmt.Printf("removed %d instance(s)\n", removed)
 	return nil
 }
 
-// Skips are not fatal: one contested instance should not strand the sweep.
-func pruneOne(t deleteTarget) (bool, error) {
-	skip := func(reason any) (bool, error) {
-		fmt.Fprintln(os.Stderr, "skipping:", reason)
-		return false, nil
+func pruneCandidates(ids []string) ([]deleteTarget, error) {
+	var orphans []deleteTarget
+	for _, id := range ids {
+		if instanceRunning(id) {
+			continue
+		}
+		inst, _, err := loadInstance(id)
+		if err != nil || !isOrphaned(inst) {
+			continue
+		}
+		t, err := newDeleteTarget(id)
+		if err != nil {
+			return orphans, err
+		}
+		orphans = append(orphans, t)
 	}
+	return orphans, nil
+}
+
+var errNoLongerOrphaned = errors.New("no longer orphaned")
+
+// Not fatal: one contested instance should not strand the sweep.
+type pruneSkip struct{ reason error }
+
+func (s *pruneSkip) Error() string { return s.reason.Error() }
+func (s *pruneSkip) Unwrap() error { return s.reason }
+
+func pruneOne(t deleteTarget) error {
+	skip := func(reason error) error { return &pruneSkip{reason: reason} }
 	lc, err := acquireLifecycleLock(t.id)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer lc.Close()
 	if err := t.marker.verify(t.dir); err != nil {
@@ -545,18 +557,17 @@ func pruneOne(t deleteTarget) (bool, error) {
 		return skip(err)
 	}
 	defer lock.Close()
-	// Reclassified after the claim: the confirmation ran unlocked.
 	inst, _, err := loadInstance(t.id)
 	if err != nil || !isOrphaned(inst) {
-		return skip(fmt.Errorf("instance %q is no longer orphaned", displayForID(t.id)))
+		return skip(fmt.Errorf("instance %q is %w", displayForID(t.id), errNoLongerOrphaned))
 	}
 	// Before the husk rename, as in deleteOne.
 	if err := os.RemoveAll(credentialsDir(t.dir)); err != nil {
-		return false, err
+		return err
 	}
 	if err := removeInstanceDir(t.id, t.dir); err != nil {
-		return false, err
+		return err
 	}
 	removeSocketDir(t.dir)
-	return true, nil
+	return nil
 }
