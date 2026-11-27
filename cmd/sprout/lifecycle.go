@@ -121,7 +121,7 @@ func stopOne(id string, behavior stopBehavior) error {
 	if err := stop(id, name); err != nil {
 		return err
 	}
-	sweepStaleCredentialsLocked(dir, 2*time.Second)
+	sweepStaleCredentialsLocked(dir, stoppedExitWait)
 	if behavior.reportStopped {
 		fmt.Printf("instance %q stopped\n", name)
 	}
@@ -132,10 +132,8 @@ func stopOne(id string, behavior stopBehavior) error {
 // that follows.
 var bootingServeWait = 30 * time.Second
 
-// A daemon holds daemon.lock well before it serves control; reading that window
-// as stopped would let the boot finish after the stop reported success.
-// Holding the lifecycle lock here cannot stall it: a daemon takes none after
-// claiming.
+// Holding the lifecycle lock here cannot stall a booting daemon: a daemon
+// takes none after claiming.
 func awaitBootingDaemon(id, dir, name string) (bool, error) {
 	if instanceRunning(id) {
 		return true, nil
@@ -221,8 +219,10 @@ var guestSync = func(id string) error {
 	return nil
 }
 
-// Polled until the control socket goes quiet, so `stop && rm` compositions
-// are safe.
+// The stopped daemon's exit, and with it the flock, may trail its control
+// socket going quiet.
+var stoppedExitWait = 2 * time.Second
+
 func waitStopped(id, name string) error {
 	stopped := pollUntil(60*time.Second, 500*time.Millisecond, func() bool {
 		return !instanceRunning(id)
@@ -384,9 +384,6 @@ func removeInstanceDir(id, dir string) error {
 	return os.RemoveAll(husk)
 }
 
-// The stopped daemon's exit may trail its control socket going quiet.
-var deleteClaimWait = 2 * time.Second
-
 // Confirmation is the caller's job, so a bulk delete asks once.
 func deleteOne(t deleteTarget) error {
 	name := displayForID(t.id)
@@ -407,7 +404,7 @@ func deleteOne(t deleteTarget) error {
 			return err
 		}
 	}
-	lock, err := t.claim(deleteClaimWait)
+	lock, err := t.claim(stoppedExitWait)
 	if err != nil {
 		return err
 	}
