@@ -18,7 +18,8 @@ import (
 
 // Every step of a spec/lifecycle.qnt trace, run against the real lifecycle
 // functions on a real state root, must produce the outcome the model chose,
-// and leave the directory, daemon.lock and lifecycle lock where the model says.
+// send STOP exactly when the model does, and leave the directory, record,
+// worktree, control socket and locks where the model says.
 // dev/check-model.sh generates the traces and points this test at them.
 func TestLifecycleConformsToModel(t *testing.T) {
 	dir := os.Getenv("SPROUT_MODEL_TRACES")
@@ -44,14 +45,16 @@ func TestLifecycleConformsToModel(t *testing.T) {
 }
 
 type modelState struct {
-	dirIno   int
-	dlock    map[int]string
-	recorded map[int]bool
-	claimed  map[string]int
-	pc       map[string]string
-	proc     string
-	act      string
-	ino      int
+	dirIno    int
+	dlock     map[int]string
+	recBundle map[int]string
+	worktree  bool
+	claimed   map[string]int
+	pc        map[string]string
+	building  map[string]string
+	proc      string
+	act       string
+	ino       int
 }
 
 func loadModelTrace(t *testing.T, path string) []modelState {
@@ -62,12 +65,14 @@ func loadModelTrace(t *testing.T, path string) []modelState {
 	}
 	var trace struct {
 		States []struct {
-			DirIno   json.RawMessage `json:"dirIno"`
-			Dlock    json.RawMessage `json:"dlock"`
-			Recorded json.RawMessage `json:"recorded"`
-			Claimed  json.RawMessage `json:"claimed"`
-			PC       json.RawMessage `json:"pc"`
-			LastStep struct {
+			DirIno    json.RawMessage `json:"dirIno"`
+			Dlock     json.RawMessage `json:"dlock"`
+			RecBundle json.RawMessage `json:"recBundle"`
+			Worktree  bool            `json:"worktree"`
+			Claimed   json.RawMessage `json:"claimed"`
+			PC        json.RawMessage `json:"pc"`
+			Building  json.RawMessage `json:"building"`
+			LastStep  struct {
 				Proc string          `json:"proc"`
 				Act  string          `json:"act"`
 				Ino  json.RawMessage `json:"ino"`
@@ -80,30 +85,31 @@ func loadModelTrace(t *testing.T, path string) []modelState {
 	states := make([]modelState, 0, len(trace.States))
 	for i, raw := range trace.States {
 		s := modelState{
-			dirIno:   itfInt(t, raw.DirIno),
-			dlock:    map[int]string{},
-			recorded: map[int]bool{},
-			claimed:  map[string]int{},
-			pc:       map[string]string{},
-			proc:     raw.LastStep.Proc,
-			act:      raw.LastStep.Act,
-			ino:      itfInt(t, raw.LastStep.Ino),
+			dirIno:    itfInt(t, raw.DirIno),
+			dlock:     map[int]string{},
+			recBundle: map[int]string{},
+			worktree:  raw.Worktree,
+			claimed:   map[string]int{},
+			pc:        map[string]string{},
+			building:  map[string]string{},
+			proc:      raw.LastStep.Proc,
+			act:       raw.LastStep.Act,
+			ino:       itfInt(t, raw.LastStep.Ino),
 		}
 		for _, kv := range itfMap(t, raw.Dlock) {
 			s.dlock[itfInt(t, kv[0])] = itfString(t, kv[1])
 		}
-		for _, kv := range itfMap(t, raw.Recorded) {
-			var b bool
-			if err := json.Unmarshal(kv[1], &b); err != nil {
-				t.Fatalf("ITF bool %s: %v", kv[1], err)
-			}
-			s.recorded[itfInt(t, kv[0])] = b
+		for _, kv := range itfMap(t, raw.RecBundle) {
+			s.recBundle[itfInt(t, kv[0])] = itfString(t, kv[1])
 		}
 		for _, kv := range itfMap(t, raw.Claimed) {
 			s.claimed[itfString(t, kv[0])] = itfInt(t, kv[1])
 		}
 		for _, kv := range itfMap(t, raw.PC) {
 			s.pc[itfString(t, kv[0])] = itfString(t, kv[1])
+		}
+		for _, kv := range itfMap(t, raw.Building) {
+			s.building[itfString(t, kv[0])] = itfString(t, kv[1])
 		}
 		if s.act == "" {
 			t.Fatalf("state %d has no lastStep.act", i)
@@ -148,18 +154,30 @@ func itfMap(t *testing.T, raw json.RawMessage) [][2]json.RawMessage {
 	return v.M
 }
 
+// The model's acts in which the code must send STOP, and those among them in
+// which the daemon exits at once rather than lingering.
+var (
+	modelStopActs = map[string]bool{
+		"stop.exited": true, "stop.lingering": true,
+		"delete.stopped.removed": true, "delete.stopped.held": true,
+		"up.reboot.ok": true, "up.reboot.held": true,
+	}
+	modelExitActs = map[string]bool{"stop.exited": true, "delete.stopped.removed": true, "up.reboot.ok": true}
+)
+
 type modelReplay struct {
 	t        *testing.T
 	id       string
 	dir      string
-	root     string
-	bundle   string
+	worktree string
+	bundles  map[string]string
 	manifest *Manifest
 	// An open fd per incarnation pins its inode, so a freed inode reused by a
 	// later incarnation cannot pass for the earlier one in SameFile.
 	incarnations map[int]*os.File
 	daemons      map[string]*modelDaemon
 	tokens       map[string]*attemptToken
+	building     map[string]string
 	targets      map[string]deleteTarget
 }
 
@@ -241,25 +259,33 @@ func newModelReplay(t *testing.T) *modelReplay {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle := filepath.Join(root, "bundle")
-	if err := os.MkdirAll(bundle, 0o700); err != nil {
+	worktree := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeHostManifest(t, bundle)
-	// `up` hands prepareUpBoot the canonical path intakeBundleArg resolved.
-	if bundle, err = filepath.EvalSymlinks(bundle); err != nil {
-		t.Fatal(err)
+	bundles := map[string]string{}
+	for _, name := range []string{"A", "B"} {
+		bundle := filepath.Join(root, "bundle-"+name)
+		if err := os.MkdirAll(bundle, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeHostManifest(t, bundle)
+		// `up` hands prepareUpBoot the canonical path intakeBundleArg resolved.
+		if bundles[name], err = filepath.EvalSymlinks(bundle); err != nil {
+			t.Fatal(err)
+		}
 	}
 	r := &modelReplay{
 		t:            t,
 		id:           id,
 		dir:          dir,
-		root:         root,
-		bundle:       bundle,
+		worktree:     worktree,
+		bundles:      bundles,
 		manifest:     bootManifest(t),
 		incarnations: map[int]*os.File{},
 		daemons:      map[string]*modelDaemon{},
 		tokens:       map[string]*attemptToken{},
+		building:     map[string]string{},
 		targets:      map[string]deleteTarget{},
 	}
 	t.Cleanup(func() {
@@ -279,10 +305,15 @@ func newModelReplay(t *testing.T) *modelReplay {
 	return r
 }
 
+func (r *modelReplay) identity() *Identity {
+	return &Identity{ID: r.id, Name: "feature", KeySource: "directory", Worktree: r.worktree, RepoRoot: r.worktree}
+}
+
 func (r *modelReplay) run(states []modelState) {
 	r.check(0, states[0])
 	for i, s := range states[1:] {
 		step := i + 1
+		r.primeStop(s.act)
 		done := make(chan string, 1)
 		go func() { done <- r.apply(s) }()
 		select {
@@ -293,27 +324,53 @@ func (r *modelReplay) run(states []modelState) {
 		case <-time.After(5 * time.Second):
 			r.t.Fatalf("step %d: %s %q blocked, but the model never waits", step, s.proc, s.act)
 		}
+		if sent := r.stopSent(); sent != modelStopActs[s.act] {
+			r.t.Fatalf("step %d: %s %q sent STOP = %v", step, s.proc, s.act, sent)
+		}
+		r.reapExited()
 		r.check(step, s)
 	}
 }
 
-// Primes the fake daemons with how the model resolves a STOP, and reports
-// afterwards whether the code sent one.
-func (r *modelReplay) expectStop(act string) func() bool {
-	exits := act == "stop.exited" || act == "delete.stopped.removed"
+func (r *modelReplay) primeStop(act string) {
 	for _, d := range r.daemons {
 		d.mu.Lock()
-		d.exitOnStop, d.stopped = exits, false
+		d.exitOnStop, d.stopped = modelExitActs[act], false
 		d.mu.Unlock()
 	}
-	return func() bool {
-		sent := false
-		for _, d := range r.daemons {
-			d.mu.Lock()
-			sent = sent || d.stopped
-			d.mu.Unlock()
+}
+
+func (r *modelReplay) stopSent() bool {
+	for _, d := range r.daemons {
+		d.mu.Lock()
+		stopped := d.stopped
+		d.mu.Unlock()
+		if stopped {
+			return true
 		}
-		return sent
+	}
+	return false
+}
+
+// Whether a daemon told to STOP during this step still holds daemon.lock.
+func (r *modelReplay) stopLingers() bool {
+	for _, d := range r.daemons {
+		d.mu.Lock()
+		lingers := d.stopped && d.lock != nil
+		d.mu.Unlock()
+		if lingers {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *modelReplay) reapExited() {
+	for p, d := range r.daemons {
+		if d.heldLock() == nil {
+			d.exit()
+			delete(r.daemons, p)
+		}
 	}
 }
 
@@ -328,6 +385,7 @@ func (r *modelReplay) apply(s modelState) string {
 			return fmt.Sprintf("up.publish error: %v", err)
 		}
 		r.tokens[p] = tok
+		r.building[p] = s.building[p]
 		if statErr == nil {
 			return "up.publish.existing"
 		}
@@ -337,28 +395,35 @@ func (r *modelReplay) apply(s modelState) string {
 		}
 		r.incarnations[s.ino] = f
 		return "up.publish.created"
-	case "up.boot.stale", "up.boot.converged", "up.boot.held", "up.boot.ok":
-		tok := r.tokens[p]
+	case "up.boot.stale", "up.boot.converged", "up.boot.held", "up.boot.ok", "up.reboot.held", "up.reboot.ok":
+		tok, bundle := r.tokens[p], r.bundles[r.building[p]]
 		delete(r.tokens, p)
+		delete(r.building, p)
 		keepToken := false
-		lock, _, err := prepareUpBoot(upIdentity(r.root, r.id), r.dir, tok, "dev", r.bundle, r.manifest, 0, &keepToken)
+		lock, _, err := prepareUpBoot(r.identity(), r.dir, tok, "dev", bundle, r.manifest, 0, &keepToken)
 		if keepToken {
 			return fmt.Sprintf("up.boot kept its token: %v", err)
 		}
 		tok.remove()
+		rebooted := r.stopSent()
 		switch {
 		case errors.Is(err, errInstanceDeletedWhileBuilding):
 			return "up.boot.stale"
 		case errors.Is(err, errUpConverged):
 			return "up.boot.converged"
+		case err != nil && rebooted:
+			return "up.reboot.held"
 		case err != nil:
 			return "up.boot.held"
 		}
 		r.daemons[p] = &modelDaemon{lock: lock}
+		if rebooted {
+			return "up.reboot.ok"
+		}
 		return "up.boot.ok"
 	case "start.notfound", "start.running", "start.held", "start.norecord", "start.ok":
 		_, statErr := os.Stat(r.dir)
-		lock, _, _, err := prepareStartBoot(upIdentity(r.root, r.id), r.dir, nil)
+		lock, _, _, err := prepareStartBoot(r.identity(), r.dir, nil)
 		var notFound *instanceNotFoundError
 		switch {
 		case errors.As(err, &notFound) && statErr != nil:
@@ -390,13 +455,12 @@ func (r *modelReplay) apply(s modelState) string {
 		delete(r.daemons, p)
 		return "daemon.exit"
 	case "stop.exited", "stop.lingering", "stop.busy", "stop.notrunning":
-		stopSent := r.expectStop(s.act)
 		err := stopOne(r.id, stopBehavior{})
 		switch {
-		case err == nil && !stopSent():
-			return "stop succeeded without sending STOP"
+		case err == nil && r.stopLingers():
+			return "stop.lingering"
 		case err == nil:
-			return r.reapStopped("stop.exited", "stop.lingering")
+			return "stop.exited"
 		case strings.Contains(err.Error(), "is not running"):
 			return "stop.notrunning"
 		}
@@ -412,12 +476,8 @@ func (r *modelReplay) apply(s modelState) string {
 		tg := r.targets[p]
 		delete(r.targets, p)
 		defer tg.marker.Close()
-		stopSent := r.expectStop(s.act)
 		err := deleteOne(tg)
-		stopped := stopSent()
-		if stopped {
-			r.reapStopped("", "")
-		}
+		stopped := r.stopSent()
 		switch {
 		case errors.Is(err, errIncarnationChanged):
 			return "delete.changed"
@@ -429,27 +489,50 @@ func (r *modelReplay) apply(s modelState) string {
 			return "delete.stopped.removed"
 		}
 		return "delete.removed"
+	case "worktree.remove":
+		if err := os.RemoveAll(r.worktree); err != nil {
+			return fmt.Sprintf("worktree.remove: %v", err)
+		}
+		return "worktree.remove"
+	case "worktree.restore":
+		if err := os.MkdirAll(r.worktree, 0o700); err != nil {
+			return fmt.Sprintf("worktree.restore: %v", err)
+		}
+		return "worktree.restore"
+	case "prune.select", "prune.select.none":
+		ids, err := instanceIDs()
+		if err != nil {
+			return fmt.Sprintf("prune.select: %v", err)
+		}
+		targets, err := pruneCandidates(ids)
+		if err != nil {
+			return fmt.Sprintf("prune.select: %v", err)
+		}
+		if len(targets) == 0 {
+			return "prune.select.none"
+		}
+		r.targets[p] = targets[0]
+		return "prune.select"
+	case "prune.changed", "prune.held", "prune.adopted", "prune.removed":
+		tg := r.targets[p]
+		delete(r.targets, p)
+		defer tg.marker.Close()
+		err := pruneOne(tg)
+		var skip *pruneSkip
+		switch {
+		case err == nil:
+			return "prune.removed"
+		case !errors.As(err, &skip):
+			return fmt.Sprintf("prune failed instead of skipping: %v", err)
+		case errors.Is(err, errIncarnationChanged):
+			return "prune.changed"
+		case errors.Is(err, errNoLongerOrphaned):
+			return "prune.adopted"
+		}
+		return "prune.held"
 	}
 	r.t.Fatalf("model action %q has no Go counterpart", s.act)
 	return ""
-}
-
-// Forgets the daemons a STOP ended, so the claims check sees them gone, and
-// names the outcome by whether any lingered.
-func (r *modelReplay) reapStopped(exited, lingering string) string {
-	outcome := exited
-	for p, d := range r.daemons {
-		d.mu.Lock()
-		stopped, gone := d.stopped, d.lock == nil
-		d.mu.Unlock()
-		switch {
-		case stopped && gone:
-			delete(r.daemons, p)
-		case stopped:
-			outcome = lingering
-		}
-	}
-	return outcome
 }
 
 func (r *modelReplay) check(step int, s modelState) {
@@ -471,10 +554,16 @@ func (r *modelReplay) check(step int, s modelState) {
 		if held, want := daemonLockHeld(r.dir), s.dlock[s.dirIno] != ""; held != want {
 			t.Fatalf("step %d (%s): daemon.lock held = %v, model says %v", step, s.act, held, want)
 		}
-		_, err = os.Stat(instanceRecordPath(r.dir))
-		if has, want := err == nil, s.recorded[s.dirIno]; has != want {
-			t.Fatalf("step %d (%s): instance.json present = %v, model says %v", step, s.act, has, want)
+		got := ""
+		if inst, _, err := loadInstance(r.id); err == nil {
+			got = inst.Bundle
 		}
+		if want := r.bundles[s.recBundle[s.dirIno]]; got != want {
+			t.Fatalf("step %d (%s): instance.json names bundle %q, model says %q", step, s.act, got, want)
+		}
+	}
+	if _, err := os.Stat(r.worktree); (err == nil) != s.worktree {
+		t.Fatalf("step %d (%s): worktree exists = %v, model says %v", step, s.act, err == nil, s.worktree)
 	}
 	serving := false
 	for p, pc := range s.pc {

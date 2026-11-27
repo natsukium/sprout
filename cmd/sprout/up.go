@@ -184,10 +184,8 @@ func upForeground(id *Identity, def, flakeRef, bundlePath string) error {
 
 var errUpConverged = errors.New("instance already runs this bundle")
 
-// The token is verified before the stop: a stale `up` whose instance was
-// deleted mid-build must not stop the replacement's daemon. The record is
-// committed before reconcileRoots, so a crash between the two leaves the
-// staging root protecting it until the next boot re-pins.
+// The record is committed before reconcileRoots, so a crash between the two
+// leaves the staging root protecting it until the next boot re-pins.
 func prepareUpBoot(id *Identity, dir string, tok *attemptToken, def, bundle string, manifest *Manifest, attempt int, keepToken *bool) (*os.File, *Instance, error) {
 	lc, err := acquireLifecycleLock(id.ID)
 	if err != nil {
