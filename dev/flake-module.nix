@@ -546,6 +546,7 @@ in
           pkgs.go
           pkgs.gopls
           pkgs.prek
+          pkgs.quint
         ]
         # fish: a guest root login shell that does not quote like sh.
         ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [

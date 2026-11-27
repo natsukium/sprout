@@ -384,6 +384,9 @@ func removeInstanceDir(id, dir string) error {
 	return os.RemoveAll(husk)
 }
 
+// The stopped daemon's exit may trail its control socket going quiet.
+var deleteClaimWait = 2 * time.Second
+
 // Confirmation is the caller's job, so a bulk delete asks once.
 func deleteOne(t deleteTarget) error {
 	name := displayForID(t.id)
@@ -392,8 +395,6 @@ func deleteOne(t deleteTarget) error {
 		return err
 	}
 	defer lc.Close()
-	// Before the stop, not after the claim: the marker, not the claim, binds
-	// the stop to the incarnation the user confirmed.
 	if err := t.marker.verify(t.dir); err != nil {
 		return fmt.Errorf("instance %q: %w", name, err)
 	}
@@ -406,8 +407,7 @@ func deleteOne(t deleteTarget) error {
 			return err
 		}
 	}
-	// The stopped daemon's exit may trail its control socket going quiet.
-	lock, err := t.claim(2 * time.Second)
+	lock, err := t.claim(deleteClaimWait)
 	if err != nil {
 		return err
 	}

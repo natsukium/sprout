@@ -3,7 +3,9 @@ package main
 // delete+recreate swaps the directory behind a pathname, so a daemon.lock
 // flock alone may protect a dead inode. The lifecycle lock lives outside the
 // deletable directory and serializes pathname create/claim/remove.
-// Lock order is lifecycle → boot, never reversed.
+// Lock order is lifecycle → boot, never reversed. spec/lifecycle.qnt models
+// the protocol these locks implement, and TestLifecycleConformsToModel holds
+// the code to it.
 
 import (
 	"errors"
@@ -61,7 +63,7 @@ func acquireLifecyclePair(a, b string) (lockA, lockB *os.File, err error) {
 
 // Covers an in-place reboot where the outgoing daemon is still unwinding.
 // Short on purpose: past it, a held lock means a real concurrent owner.
-const instanceLockWait = 15 * time.Second
+var instanceLockWait = 15 * time.Second
 
 // Held for as long as the daemon runs. The kernel drops a flock on process
 // death however abrupt, so holding it proves no other daemon is alive here,
@@ -151,10 +153,11 @@ func claimInstance(id string, wait time.Duration, serving func() bool) (*os.File
 	return claimInstanceLocked(dir, wait, serving)
 }
 
-// Binds an unlocked user confirmation to the incarnation it was asked about.
 // A held fd rather than a stored inode value: delete+recreate can reuse a
 // freed inode.
 type incarnationMarker struct{ f *os.File }
+
+var errIncarnationChanged = errors.New("instance changed since confirmation; re-run the command")
 
 func openIncarnationMarker(dir string) (*incarnationMarker, error) {
 	f, err := os.Open(dir)
@@ -171,7 +174,7 @@ func (m *incarnationMarker) verify(dir string) error {
 	}
 	current, err := os.Stat(dir)
 	if err != nil || !os.SameFile(held, current) {
-		return fmt.Errorf("instance changed since confirmation; re-run the command")
+		return errIncarnationChanged
 	}
 	return nil
 }

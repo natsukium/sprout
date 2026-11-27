@@ -36,6 +36,7 @@ jobs:
       - run: nix develop -c go vet ./...
       # -race because the network stack and the idle watcher are concurrent.
       - run: nix develop -c go test -race ./...
+      - run: nix develop -c ./dev/check-model.sh
 
   linux:
     name: flake check / go (${{ matrix.system }})
@@ -67,6 +68,7 @@ jobs:
       - run: nix flake check --print-build-logs
       - run: nix develop -c go vet ./...
       - run: nix develop -c go test -race ./...
+      - run: nix develop -c ./dev/check-model.sh
       # The macOS job cannot build the aarch64-linux guest a vfkit bundle
       # needs, so the contract test runs against the QEMU runner only.
       - run: nix develop -c go test -tags integration -run TestManifestRunnerContract ./cmd/sprout
